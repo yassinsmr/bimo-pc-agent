@@ -57,7 +57,9 @@ jobs:
         # the frozen glass starting values, runs one continuous morph for
         # 10 s after 60 s idle, then prints JSON: idle RAM/CPU over 60 s,
         # CPU during the 10 s morph, frames drawn. Exits non-zero if the
-        # window cannot be created.
+        # window cannot be created. It also renders two offscreen PNG
+        # snapshots (island-resting.png, island-morph.png) so the island
+        # can be seen — the runner has no screen to look at.
         run: .\target\x86_64-pc-windows-msvc\release\bimo-agent.exe --gate --gate-out gate-results.json
 
       - name: Publish gate results to gate-results branch
@@ -67,7 +69,7 @@ jobs:
           git config user.name "bimo-gate"
           git config user.email "bimo-gate@local"
           git checkout -B gate-results
-          git add -f gate-results.json || true
+          git add -f gate-results.json island-resting.png island-morph.png || true
           if git diff --cached --quiet; then
             echo "no gate results to commit"
           else
@@ -82,5 +84,7 @@ jobs:
           name: windows-gate
           path: |
             gate-results.json
+            island-resting.png
+            island-morph.png
             target/x86_64-pc-windows-msvc/release/bimo-agent.exe
           retention-days: 30
