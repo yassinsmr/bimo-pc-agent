@@ -1,0 +1,20 @@
+[package]
+name = "bimo-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "bimo-agent"
+path = "src/main.rs"
+
+[dependencies]
+bimo-core = { path = "../../crates/bimo-core" }
+bimo-island = { path = "../../crates/bimo-island" }
+
+[profile.release]
+opt-level = "z"      # smallest binary, less resident code
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
