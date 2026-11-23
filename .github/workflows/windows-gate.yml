@@ -1,0 +1,86 @@
+# Windows proof-gate workflow — v2 (MSVC target, results committed to branch)
+# Purpose: build bimo-agent for real Windows and run the draw experiment
+# on a real Windows machine (GitHub-hosted windows-latest runner).
+#
+# Platform verification (2026-11-23, checked against GitHub's own billing
+# docs via secondary sources that cite docs.github.com, Nov 2026):
+# - GitHub Free: $12/month included compute (dollar-based since 2026-10-28).
+# - Standard runners in PUBLIC repositories: free and unlimited, no minute cap.
+# - Windows 2-core x64 standard runner: $0.010/min -> $12 = 1,200 min/month
+#   on PRIVATE repos. Artifact storage 500 MB (Free), cache 10 GB/repo.
+# - Consequence: with a PUBLIC repo the Windows gate runs cost $0.
+#   Caveat: the code is public by construction — fine, our own MIT code,
+#   no secrets. Larger/GPU runners are billed even on public repos — never use.
+# - Runner: windows-latest (Windows Server, 4-core/16 GB on public repos).
+#   GUI note: the runner has a desktop session; the gate binary must open a
+#   real window and draw. If the window cannot be created headless, the run
+#   fails loudly (gate = fail, not "skip").
+#
+# Build target: MSVC (x86_64-pc-windows-msvc) — no mingw install needed on
+# the runner. The local reproducible build (build-windows.sh) still uses the
+# mingw GNU target; both produce a real PE importing d2d1.dll + dwmapi.dll.
+#
+# Results: the gate JSON is committed to the `gate-results` branch (in
+# addition to the artifact upload) so it can be read without the API.
+
+name: windows-proof-gate
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "crates/**"
+      - "apps/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+
+permissions:
+  contents: write
+
+jobs:
+  gate:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable + MSVC target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build release for Windows
+        run: cargo build --release --target x86_64-pc-windows-msvc --locked
+
+      - name: Gate experiment — one island capsule + one morph, measured
+        # bimo-agent --gate opens the island window, draws the capsule with
+        # the frozen glass starting values, runs one continuous morph for
+        # 10 s after 60 s idle, then prints JSON: idle RAM/CPU over 60 s,
+        # CPU during the 10 s morph, frames drawn. Exits non-zero if the
+        # window cannot be created.
+        run: .\target\x86_64-pc-windows-msvc\release\bimo-agent.exe --gate --gate-out gate-results.json
+
+      - name: Publish gate results to gate-results branch
+        if: always()
+        shell: bash
+        run: |
+          git config user.name "bimo-gate"
+          git config user.email "bimo-gate@local"
+          git checkout -B gate-results
+          git add -f gate-results.json || true
+          if git diff --cached --quiet; then
+            echo "no gate results to commit"
+          else
+            git commit -m "gate results $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            git push -f origin gate-results
+          fi
+
+      - name: Upload gate results + binary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-gate
+          path: |
+            gate-results.json
+            target/x86_64-pc-windows-msvc/release/bimo-agent.exe
+          retention-days: 30
