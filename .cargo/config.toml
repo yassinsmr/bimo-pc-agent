@@ -1,0 +1,5 @@
+# Reproducible Windows cross-build: the mingw linker for the GNU target.
+# Part of the Windows proof gate (step 1): a clean checkout + build-windows.sh
+# must produce a real .exe without any machine-local rustc configuration.
+[target.x86_64-pc-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc"
