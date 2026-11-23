@@ -118,13 +118,15 @@ mod windows_impl {
     use super::{GlassSpec, IslandGeometry, IslandState};
     use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant};
-    use windows::core::w;
+    use windows::core::{w, HSTRING};
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::Graphics::Direct2D::Common::*;
     use windows::Win32::Graphics::Direct2D::*;
     use windows::Win32::Graphics::Dwm::DwmExtendFrameIntoClientArea;
-    use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_UNKNOWN;
+    use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_UNKNOWN};
     use windows::Win32::Graphics::Gdi::UpdateWindow;
+    use windows::Win32::Graphics::Imaging::*;
+    use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS_EX};
     use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
@@ -144,14 +146,93 @@ mod windows_impl {
     const MORPH_FPS_MIN: f64 = 50.0;
     const MORPH_CPU_MAX_PCT: f64 = 25.0;
 
+    /// Draws the capsule + avatar circle into any Direct2D render
+    /// target (live HWND window or offscreen WIC bitmap). `bg`
+    /// fills the whole surface first when given (dark backdrop for
+    /// snapshots so the glass reads on its own); None clears to
+    /// transparent (the live window, where DWM glass is the backdrop).
+    struct CapsulePainter {
+        fill_brush: ID2D1SolidColorBrush,
+        rim_brush: ID2D1SolidColorBrush,
+        avatar_brush: ID2D1SolidColorBrush,
+    }
+
+    impl CapsulePainter {
+        fn new(target: &ID2D1RenderTarget, spec: &GlassSpec) -> Result<Self, String> {
+            unsafe {
+                let fill_brush = target
+                    .CreateSolidColorBrush(
+                        &D2D1_COLOR_F { r: 1.0, g: 1.0, b: 1.0, a: 0.16 },
+                        None,
+                    )
+                    .map_err(|e| format!("fill brush: {e}"))?;
+                let rim_brush = target
+                    .CreateSolidColorBrush(
+                        &D2D1_COLOR_F { r: 1.0, g: 1.0, b: 1.0, a: spec.rim_brightness },
+                        None,
+                    )
+                    .map_err(|e| format!("rim brush: {e}"))?;
+                let avatar_brush = target
+                    .CreateSolidColorBrush(
+                        &D2D1_COLOR_F { r: 0.25, g: 0.55, b: 1.0, a: 1.0 },
+                        None,
+                    )
+                    .map_err(|e| format!("avatar brush: {e}"))?;
+                Ok(CapsulePainter { fill_brush, rim_brush, avatar_brush })
+            }
+        }
+
+        fn draw(
+            &self,
+            target: &ID2D1RenderTarget,
+            geo: IslandGeometry,
+            bg: Option<D2D1_COLOR_F>,
+        ) -> Result<(), String> {
+            unsafe {
+                target.BeginDraw();
+                match bg {
+                    Some(c) => target.Clear(Some(&c)),
+                    None => {
+                        target.Clear(Some(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }));
+                    }
+                }
+                // Pill: bottom-anchored, centered, capsule radius.
+                let left = (WIN_W as f32 - geo.width) / 2.0;
+                let top = WIN_H as f32 - 10.0 - geo.height;
+                let pill = D2D1_ROUNDED_RECT {
+                    rect: D2D_RECT_F {
+                        left,
+                        top,
+                        right: left + geo.width,
+                        bottom: top + geo.height,
+                    },
+                    radiusX: geo.height / 2.0,
+                    radiusY: geo.height / 2.0,
+                };
+                target.FillRoundedRectangle(&pill, &self.fill_brush);
+                target.DrawRoundedRectangle(&pill, &self.rim_brush, 1.0, None);
+                // Avatar circle above the pill (reference screenshot).
+                let d = geo.avatar_diameter;
+                let mut avatar = D2D1_ELLIPSE::default();
+                avatar.point.X = WIN_W as f32 / 2.0;
+                avatar.point.Y = d / 2.0 + 6.0;
+                avatar.radiusX = d / 2.0;
+                avatar.radiusY = d / 2.0;
+                target.FillEllipse(&avatar, &self.avatar_brush);
+                target
+                    .EndDraw(None, None)
+                    .map_err(|e| format!("EndDraw: {e}"))?;
+                Ok(())
+            }
+        }
+    }
+
     struct Renderer {
         // Kept for future resize/recreate; the render target owns the
         // live HWND reference today.
         _hwnd: HWND,
         target: ID2D1HwndRenderTarget,
-        fill_brush: ID2D1SolidColorBrush,
-        rim_brush: ID2D1SolidColorBrush,
-        avatar_brush: ID2D1SolidColorBrush,
+        painter: CapsulePainter,
         dwm_glass: bool,
     }
 
@@ -258,62 +339,14 @@ mod windows_impl {
                 target.SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
 
                 let spec = GlassSpec::default();
-                let fill_brush = target
-                    .CreateSolidColorBrush(
-                        &D2D1_COLOR_F { r: 1.0, g: 1.0, b: 1.0, a: 0.16 },
-                        None,
-                    )
-                    .map_err(|e| format!("fill brush: {e}"))?;
-                let rim_brush = target
-                    .CreateSolidColorBrush(
-                        &D2D1_COLOR_F { r: 1.0, g: 1.0, b: 1.0, a: spec.rim_brightness },
-                        None,
-                    )
-                    .map_err(|e| format!("rim brush: {e}"))?;
-                let avatar_brush = target
-                    .CreateSolidColorBrush(
-                        &D2D1_COLOR_F { r: 0.25, g: 0.55, b: 1.0, a: 1.0 },
-                        None,
-                    )
-                    .map_err(|e| format!("avatar brush: {e}"))?;
+                let painter = CapsulePainter::new(&target, &spec)?;
 
-                Ok(Renderer { _hwnd: hwnd, target, fill_brush, rim_brush, avatar_brush, dwm_glass })
+                Ok(Renderer { _hwnd: hwnd, target, painter, dwm_glass })
             }
         }
 
         fn draw(&self, geo: IslandGeometry) -> Result<(), String> {
-            unsafe {
-                self.target.BeginDraw();
-                let clear = D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.0 };
-                self.target.Clear(Some(&clear));
-                // Pill: bottom-anchored, centered, capsule radius.
-                let left = (WIN_W as f32 - geo.width) / 2.0;
-                let top = WIN_H as f32 - 10.0 - geo.height;
-                let pill = D2D1_ROUNDED_RECT {
-                    rect: D2D_RECT_F {
-                        left,
-                        top,
-                        right: left + geo.width,
-                        bottom: top + geo.height,
-                    },
-                    radiusX: geo.height / 2.0,
-                    radiusY: geo.height / 2.0,
-                };
-                self.target.FillRoundedRectangle(&pill, &self.fill_brush);
-                self.target.DrawRoundedRectangle(&pill, &self.rim_brush, 1.0, None);
-                // Avatar circle above the pill (reference screenshot).
-                let d = geo.avatar_diameter;
-                let mut avatar = D2D1_ELLIPSE::default();
-                avatar.point.X = WIN_W as f32 / 2.0;
-                avatar.point.Y = d / 2.0 + 6.0;
-                avatar.radiusX = d / 2.0;
-                avatar.radiusY = d / 2.0;
-                self.target.FillEllipse(&avatar, &self.avatar_brush);
-                self.target
-                    .EndDraw(None, None)
-                    .map_err(|e| format!("EndDraw: {e}"))?;
-                Ok(())
-            }
+            self.painter.draw(&self.target, geo, None)
         }
     }
 
@@ -340,6 +373,96 @@ mod windows_impl {
             if let Err(e) = r.draw(geo) {
                 eprintln!("[island] draw failed: {e}");
             }
+        }
+    }
+
+    /// Renders the same capsule offscreen (WIC bitmap target) and
+    /// saves it as a PNG, so Yassin can SEE the island — the gate
+    /// runner has no screen to look at. Two shots per gate run:
+    /// resting + mid-morph. A failed shot is reported in the JSON
+    /// but does not fail the performance gate.
+    fn save_snapshot(path: &str, geo: IslandGeometry) -> Result<(), String> {
+        unsafe {
+            let wic: IWICImagingFactory = CoCreateInstance(
+                &CLSID_WICImagingFactory,
+                None,
+                CLSCTX_INPROC_SERVER,
+            )
+            .map_err(|e| format!("WIC factory: {e}"))?;
+            let bitmap = wic
+                .CreateBitmap(
+                    WIN_W as u32,
+                    WIN_H as u32,
+                    &GUID_WICPixelFormat32bppPBGRA,
+                    WICBitmapCacheOnDemand,
+                )
+                .map_err(|e| format!("WIC bitmap: {e}"))?;
+            let factory = D2D1CreateFactory::<ID2D1Factory>(
+                D2D1_FACTORY_TYPE_SINGLE_THREADED,
+                None,
+            )
+            .map_err(|e| format!("D2D factory: {e}"))?;
+            let rt_props = D2D1_RENDER_TARGET_PROPERTIES {
+                r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
+                pixelFormat: D2D1_PIXEL_FORMAT {
+                    format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                    alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+                },
+                dpiX: 0.0,
+                dpiY: 0.0,
+                usage: D2D1_RENDER_TARGET_USAGE_NONE,
+                minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
+            };
+            let wic_target = factory
+                .CreateWicBitmapRenderTarget(&bitmap, &rt_props)
+                .map_err(|e| format!("WIC render target: {e}"))?;
+            wic_target.SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+            let spec = GlassSpec::default();
+            let painter = CapsulePainter::new(&wic_target, &spec)?;
+            // Dark slate backdrop (phone-wallpaper stand-in) so the
+            // glass capsule is visible in the PNG on its own.
+            painter.draw(
+                &wic_target,
+                geo,
+                Some(D2D1_COLOR_F { r: 0.07, g: 0.08, b: 0.14, a: 1.0 }),
+            )?;
+
+            let stream = wic
+                .CreateStream()
+                .map_err(|e| format!("WIC stream: {e}"))?;
+            stream
+                .InitializeFromFilename(&HSTRING::from(path), 0x4000_0000)
+                .map_err(|e| format!("WIC stream file: {e}"))?;
+            let encoder = wic
+                .CreateEncoder(&GUID_ContainerFormatPng, std::ptr::null())
+                .map_err(|e| format!("PNG encoder: {e}"))?;
+            encoder
+                .Initialize(&stream, WICBitmapEncoderNoCache)
+                .map_err(|e| format!("encoder init: {e}"))?;
+            let mut frame: Option<IWICBitmapFrameEncode> = None;
+            let mut bag: Option<
+                windows::Win32::System::Com::StructuredStorage::IPropertyBag2,
+            > = None;
+            encoder
+                .CreateNewFrame(&mut frame, &mut bag)
+                .map_err(|e| format!("PNG frame: {e}"))?;
+            let frame = frame.ok_or("PNG frame missing")?;
+            frame
+                .Initialize(bag.as_ref())
+                .map_err(|e| format!("frame init: {e}"))?;
+            frame
+                .SetSize(WIN_W as u32, WIN_H as u32)
+                .map_err(|e| format!("frame size: {e}"))?;
+            let mut fmt = GUID_WICPixelFormat32bppPBGRA;
+            frame
+                .SetPixelFormat(&mut fmt)
+                .map_err(|e| format!("frame format: {e}"))?;
+            frame
+                .WriteSource(&bitmap, std::ptr::null())
+                .map_err(|e| format!("frame write: {e}"))?;
+            frame.Commit().map_err(|e| format!("frame commit: {e}"))?;
+            encoder.Commit().map_err(|e| format!("encoder commit: {e}"))?;
+            Ok(())
         }
     }
 
@@ -411,6 +534,23 @@ mod windows_impl {
             return 2;
         }
 
+        // Screenshots for Yassin (offscreen PNGs, taken before the
+        // timed phases so file I/O never touches the measurements).
+        let mid_morph = IslandGeometry::lerp(resting, working, 0.5);
+        let mut shots_ok = true;
+        let mut shots_error: Option<String> = None;
+        for (path, geo) in [
+            ("island-resting.png", resting),
+            ("island-morph.png", mid_morph),
+        ] {
+            if let Err(e) = save_snapshot(path, geo) {
+                shots_ok = false;
+                shots_error = Some(format!("{path}: {e}"));
+                eprintln!("[gate] snapshot failed: {path}: {e}");
+                break;
+            }
+        }
+
         // Phase A — idle 60 s: one static frame, then nothing.
         let mut rss_min = u64::MAX;
         let mut rss_max = 0u64;
@@ -480,7 +620,11 @@ mod windows_impl {
             && morph_cpu < MORPH_CPU_MAX_PCT;
         let gate = if pass { "pass" } else { "fail" };
         let json = format!(
-            "{{\"gate\":\"{gate}\",\"dwm_glass\":{dwm_glass},\"glass\":{{\"blur_radius\":{},\"dim_opacity\":{},\"rim_brightness\":{},\"saturation\":{}}},\"idle\":{{\"seconds\":60,\"cpu_pct\":{idle_cpu:.2},\"rss_kb\":{{\"min\":{idle_rss_min_kb},\"mean\":{idle_rss_mean_kb},\"max\":{idle_rss_max_kb}}}}},\"morph\":{{\"seconds\":{:.1},\"frames\":{frames},\"fps\":{morph_fps:.1},\"cpu_pct\":{morph_cpu:.2},\"rss_kb\":{morph_rss_kb}}},\"draw_error\":{}}}",
+            "{{\"gate\":\"{gate}\",\"dwm_glass\":{dwm_glass},\"shots\":{{\"resting\":\"island-resting.png\",\"morph\":\"island-morph.png\",\"ok\":{shots_ok},\"error\":{}}},\"glass\":{{\"blur_radius\":{},\"dim_opacity\":{},\"rim_brightness\":{},\"saturation\":{}}},\"idle\":{{\"seconds\":60,\"cpu_pct\":{idle_cpu:.2},\"rss_kb\":{{\"min\":{idle_rss_min_kb},\"mean\":{idle_rss_mean_kb},\"max\":{idle_rss_max_kb}}}}},\"morph\":{{\"seconds\":{:.1},\"frames\":{frames},\"fps\":{morph_fps:.1},\"cpu_pct\":{morph_cpu:.2},\"rss_kb\":{morph_rss_kb}}},\"draw_error\":{}}}",
+            match &shots_error {
+                Some(e) => format!("\"{}\"", e.replace('"', "'")),
+                None => "null".to_string(),
+            },
             spec.blur_radius,
             spec.dim_opacity,
             spec.rim_brightness,
