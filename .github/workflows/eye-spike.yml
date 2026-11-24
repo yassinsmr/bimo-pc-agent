@@ -12,6 +12,13 @@
 # (council condition 2). A headless-runner failure is recorded as
 # such in the JSON, not silently treated as a design failure.
 #
+# DRAFT (cycle 13, 2026-11-24) — changes vs the version at 1474ba3:
+#   - Results publish to the `spike-results` branch (council condition 4:
+#     one branch per workflow; gate-results belongs to windows-proof-gate).
+#   - Runs on push to eye-spike paths too (council condition 5: permanent CI),
+#     not only workflow_dispatch.
+# Copy to bimo-pc-agent/.github/workflows/eye-spike.yml after the block lifts.
+#
 # Lessons reused (cycles 2-7): permissions: contents: write (else the
 # push fails 403), actions/checkout present in the publish step,
 # if: always() on publish, each check continue-on-error so one failure
@@ -21,6 +28,10 @@ name: eye-spike
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - "apps/eye-spike/**"
+      - ".github/workflows/eye-spike.yml"
 
 permissions:
   contents: write
@@ -94,20 +105,25 @@ jobs:
         continue-on-error: true
         run: .\target\x86_64-pc-windows-msvc\release\eye-spike.exe --merge
 
-      - name: Publish spike results to gate-results branch
+      - name: Publish spike results to spike-results branch
         if: always()
         shell: bash
         run: |
           git config user.name "bimo-gate"
           git config user.email "bimo-gate@local"
-          git checkout -B gate-results
+          git fetch origin spike-results || true
+          if git rev-parse --verify origin/spike-results >/dev/null 2>&1; then
+            git checkout spike-results
+          else
+            git checkout -B spike-results
+          fi
           git add -f spike-results.json spike-gcap.json spike-dxgi.json spike-fullscreen.json spike-hook.json defender-before.json defender-after.json || true
           git add -f spike-gcap.png spike-dxgi.png spike-fullscreen.png || true
           if git diff --cached --quiet; then
             echo "no spike results to commit"
           else
             git commit -m "eye spike results $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            git push -f origin gate-results
+            git push origin spike-results
           fi
 
       - name: Upload spike results + binary
