@@ -6,6 +6,14 @@
 //! Temporary names (`.tmp`, `.part`, `.crdownload`) are never reported
 //! on their own; a rename into the final name reports both the rename
 //! and the completion of the final file.
+//!
+//! Platform mapping that matters (cycle 15, proven in source):
+//! notify's Windows backend reports EVERY content change as
+//! `Modify(ModifyKind::Any)` (FILE_ACTION_MODIFIED → Any in
+//! notify 7's windows.rs), while Linux inotify reports
+//! `Modify(Data)`. `map_event` therefore treats every non-rename
+//! Modify kind as a completion — matching kinds by name dropped
+//! `Any` silently and Windows missed all later file changes.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -84,7 +92,23 @@ fn map_event(
                         }
                     }
                 }
-                ModifyKind::Data(_) | ModifyKind::Metadata(_) | ModifyKind::Other => {
+                ModifyKind::Name(_) => {
+                    // Single-path rename half (From or To without its
+                    // pair): direction unknown — ignore it; the paired
+                    // event or the file's own completion covers it.
+                }
+                _ => {
+                    // Every other modification: Data, Metadata, Other
+                    // AND Any. `Any` is what notify's Windows backend
+                    // reports for EVERY content change
+                    // (FILE_ACTION_MODIFIED maps to Modify(Any) in
+                    // notify 7's windows.rs). The old match listed
+                    // Data/Metadata/Other explicitly and dropped `Any`
+                    // in the catch-all — so on Windows every later
+                    // change to an existing file vanished silently
+                    // (cycle 15: 1 completion for setup.exe, no re-hash).
+                    // On Linux inotify reports Data, which is why the
+                    // same test passed there.
                     for p in paths {
                         if !is_temp_name(p) && !p.is_dir() {
                             if let Ok(meta) = std::fs::metadata(p) {
@@ -96,7 +120,6 @@ fn map_event(
                         }
                     }
                 }
-                _ => {}
             }
         }
         EventKind::Remove(_) => {
@@ -197,4 +220,67 @@ pub fn start_watcher(
             std::thread::sleep(Duration::from_millis(200));
         }
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use notify::event::{Event, EventKind, ModifyKind};
+    use notify_debouncer_full::DebouncedEvent;
+
+    fn debounced(kind: EventKind, path: &Path) -> DebouncedEvent {
+        DebouncedEvent::new(
+            Event::new(kind).add_path(path.to_path_buf()),
+            std::time::Instant::now(),
+        )
+    }
+
+    fn temp_file(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "bimo-eye-watch-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(name);
+        std::fs::write(&path, b"test content").unwrap();
+        path
+    }
+
+    fn is_completion_for(events: &[EyeEvent], path: &Path) -> bool {
+        events.iter().any(|e| match e {
+            EyeEvent::FileCompleted { path: p, .. } => p == path,
+            _ => false,
+        })
+    }
+
+    #[test]
+    fn windows_modify_any_maps_to_completion() {
+        // Regression test for cycle 15: notify's Windows backend maps
+        // FILE_ACTION_MODIFIED to Modify(Any) — the old explicit match
+        // (Data/Metadata/Other) dropped it, so Windows never reported
+        // a later change to an existing file.
+        let path = temp_file("setup.exe");
+        let ev = debounced(
+            EventKind::Modify(ModifyKind::Any),
+            &path,
+        );
+        let out = map_event(&ev);
+        assert!(
+            is_completion_for(&out, &path),
+            "Modify(Any) must map to file.completed, got {out:?}"
+        );
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn modify_data_still_maps_to_completion() {
+        let path = temp_file("notes.txt");
+        let ev = debounced(
+            EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Any)),
+            &path,
+        );
+        let out = map_event(&ev);
+        assert!(is_completion_for(&out, &path));
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
 }
