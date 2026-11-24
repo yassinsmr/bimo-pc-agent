@@ -21,10 +21,15 @@
 #   install duration. Join is NOT attempted — that needs a setup key
 #   from a NetBird account, which only Yassin creates.
 #
-# To activate: copy to .github/workflows/netbird-dry-run.yml in the
-# public repo yassinsmr/bimo-pc-agent and run it (workflow_dispatch).
-# It publishes netbird-dry-run.json to the gate-results branch, same
-# pattern as windows-proof-gate v2.
+# Run 1 (2026-11-24 05:42, run 45335122004): FAILED on a workflow bug, not
+# on NetBird — winget install succeeded (11s) and the NetBird service was
+# Running before and after a 10s wait, but `netbird` was not on PATH in the
+# same PowerShell session (documented: PATH updates only for new terminals),
+# so `netbird version`/`netbird status` failed with "not recognized" and the
+# publish steps were skipped (no `if: always()`). Fixed in v2: full path
+# C:\Program Files\NetBird\netbird.exe + `if: always()` on publish steps.
+# Run 1 JSON (from the step log): service Running/Running, install 10.03s,
+# joined_network false, version/status null (CLI never ran).
 
 name: netbird-dry-run
 
@@ -53,13 +58,18 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Continue"
+          # NOTE (run 1 lesson): winget updates PATH only for NEW terminals,
+          # so `netbird` is not on PATH in this session. The NetBird docs say
+          # the same ("Open a new terminal"). Use the full install path:
+          # C:\Program Files\NetBird\netbird.exe
+          $nb = Join-Path $env:ProgramFiles "NetBird\netbird.exe"
           $svc = Get-Service -Name NetBird -ErrorAction SilentlyContinue
           $svcState = if ($svc) { $svc.Status.ToString() } else { "missing" }
           Start-Sleep -Seconds 10
           $svc = Get-Service -Name NetBird -ErrorAction SilentlyContinue
           $svcStateAfter = if ($svc) { $svc.Status.ToString() } else { "missing" }
-          $version = (& netbird version 2>&1 | Out-String).Trim()
-          $statusOut = (& netbird status 2>&1 | Out-String).Trim()
+          $version = (& $nb version 2>&1 | Out-String).Trim()
+          $statusOut = (& $nb status 2>&1 | Out-String).Trim()
           $statusCode = $LASTEXITCODE
           $result = @{
             dry_run = "netbird-install-service-cli"
@@ -80,6 +90,7 @@ jobs:
           if ($statusCode -ne 0) { Write-Error "netbird status failed (daemon unreachable)"; exit 1 }
 
       - name: Upload dry-run results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: netbird-dry-run
@@ -87,6 +98,7 @@ jobs:
           retention-days: 30
 
       - name: Publish results to gate-results branch
+        if: always()
         shell: pwsh
         run: |
           git config user.name "bimo-pc-agent"
