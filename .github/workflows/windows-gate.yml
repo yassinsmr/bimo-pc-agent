@@ -69,7 +69,8 @@ jobs:
           git config user.name "bimo-gate"
           git config user.email "bimo-gate@local"
           git checkout -B gate-results
-          git add -f gate-results.json island-resting.png island-morph.png || true
+          git add -f gate-results.json || true
+          git add -f island-resting.png island-morph.png || true
           if git diff --cached --quiet; then
             echo "no gate results to commit"
           else
