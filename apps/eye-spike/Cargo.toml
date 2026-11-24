@@ -1,0 +1,26 @@
+[package]
+name = "eye-spike"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "eye-spike"
+path = "src/main.rs"
+
+[dependencies]
+# Windows-only capture stack. Kept behind cfg(windows) so the crate still
+# type-checks on a Linux dev machine (stub main exits 2 there).
+[target.'cfg(windows)'.dependencies]
+windows-capture = "2.0.1"
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_Accessibility",
+    "Win32_UI_WindowsAndMessaging",
+] }
+# NOTE: [profile.release] lives in no member Cargo.toml — workspace profiles
+# are ignored in members (cargo warning). Release tuning, if needed, goes in
+# the workspace root Cargo.toml.
