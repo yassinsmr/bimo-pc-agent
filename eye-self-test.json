@@ -19,12 +19,17 @@
     {
       "detail": "without opt-in, detection refuses and protect_line errors; with opt-in, plaintext is explicit",
       "name": "crypto fails closed (simulated DPAPI failure)",
-      "status": "fail"
+      "status": "pass"
     },
     {
       "detail": "background hash worker must hash the installer",
       "name": "file.hash setup.exe",
       "status": "pass"
+    },
+    {
+      "detail": "1 file.completed events for setup.exe; the change must be reported",
+      "name": "second completion observed for setup.exe",
+      "status": "fail"
     },
     {
       "detail": "1 file.hash events for setup.exe; first hash must differ from last",
@@ -96,9 +101,9 @@
   ],
   "notes": [],
   "resources": {
-    "cpu_seconds": 0.0625,
-    "elapsed_seconds": 39.0520587,
-    "rss_kb": 7848
+    "cpu_seconds": 0.046875,
+    "elapsed_seconds": 39.056714,
+    "rss_kb": 7844
   },
   "verdict": "fail"
 }
