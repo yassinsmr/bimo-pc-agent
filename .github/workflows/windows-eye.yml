@@ -1,0 +1,94 @@
+# Windows eye-core workflow — Track A Unit 2 (the Eye), permanent CI.
+# Purpose: on every push touching the eye core, build bimo-eye for real
+# Windows and run its self-test scenario (spec section 8 of
+# track-a-unit2-eye-core-build.md):
+#   - create a fake setup.exe in a temp Downloads folder + a text file
+#   - the events must appear in the local JSONL log, correct and
+#     hash-chained (file.completed, install.detected low, file.hash)
+#   - Notepad open/close must appear as proc.seen (Windows only)
+#   - the eye.stop round-trip must stop logging and resume cleanly
+#   - 60 s idle is measured by the proof gate, not here; runner numbers
+#     are always labelled "does not prove device performance"
+#     (flawhunt amendment 11-z); the real budget is decided on the Legion.
+#
+# Results go to the `spike-results` branch (never gate-results — one
+# branch per workflow, council condition 4 on the spike). The publish
+# step checks the branch out and appends (no force-push), so the
+# cycle-9 spike results (ebdb40a) stay in the branch history.
+#
+# UPDATED (cycle 14, 2026-11-24): the eye core is a standalone crate
+# (crates/bimo-eye, own [workspace] table) so it builds without
+# touching the workspace root. The self-test binary is
+# bimo-eye-self-test.exe. The `--eye-self-test` flag on bimo-agent
+# itself comes with the workspace-integration step, after this core
+# passes CI + council.
+
+name: windows-eye
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "crates/bimo-eye/**"
+      - ".github/workflows/windows-eye.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+
+permissions:
+  contents: write
+
+jobs:
+  eye:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable + MSVC target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build eye core for Windows
+        run: |
+          cd crates/bimo-eye
+          cargo build --release --target x86_64-pc-windows-msvc --locked
+
+      - name: Eye-core self-test scenario
+        # Runs the whole core in a throwaway temp dir and verifies the
+        # JSONL log (events present, hash-chain valid). Exits non-zero
+        # if any expected event is missing. Honest limit: window events
+        # and screenshots are not part of this core — a headless failure
+        # is recorded as such in the JSON, not silently treated as a
+        # design failure.
+        run: .\crates\bimo-eye\target\x86_64-pc-windows-msvc\release\bimo-eye-self-test.exe --out eye-self-test.json
+
+      - name: Publish eye results to spike-results branch
+        if: always()
+        shell: bash
+        run: |
+          git config user.name "bimo-gate"
+          git config user.email "bimo-gate@local"
+          git fetch origin spike-results || true
+          if git rev-parse --verify origin/spike-results >/dev/null 2>&1; then
+            git checkout spike-results
+          else
+            git checkout -B spike-results
+          fi
+          git add -f eye-self-test.json || true
+          if git diff --cached --quiet; then
+            echo "no eye results to commit"
+          else
+            git commit -m "eye self-test results $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            git push origin spike-results
+          fi
+
+      - name: Upload eye results + binary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-eye
+          path: |
+            eye-self-test.json
+            crates/bimo-eye/target/x86_64-pc-windows-msvc/release/bimo-eye-self-test.exe
+          retention-days: 30
