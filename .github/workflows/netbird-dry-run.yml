@@ -21,15 +21,15 @@
 #   install duration. Join is NOT attempted — that needs a setup key
 #   from a NetBird account, which only Yassin creates.
 #
-# Run 1 (2026-11-24 05:42, run 45335122004): FAILED on a workflow bug, not
-# on NetBird — winget install succeeded (11s) and the NetBird service was
-# Running before and after a 10s wait, but `netbird` was not on PATH in the
-# same PowerShell session (documented: PATH updates only for new terminals),
-# so `netbird version`/`netbird status` failed with "not recognized" and the
-# publish steps were skipped (no `if: always()`). Fixed in v2: full path
-# C:\Program Files\NetBird\netbird.exe + `if: always()` on publish steps.
-# Run 1 JSON (from the step log): service Running/Running, install 10.03s,
-# joined_network false, version/status null (CLI never ran).
+# Run 2 (2026-11-24 05:47, run 45335821413): dry-run checks ALL PASSED —
+# winget install 11.55s, version 0.83.2, service Running before/after 10s,
+# `netbird status` exit 0 with "Daemon status: NeedsLogin" (daemon reachable,
+# not logged in — exactly the expected dry-run state, no join, no credentials).
+# JSON verified independently from the artifact (sha256 87f6e752...). The run
+# still shows Failure ONLY because the publish step had no git checkout
+# ("fatal: not in a git directory") and a redundant Copy-Item. Fixed in v3:
+# actions/checkout@v4 first step + `git add -f` directly (gate-workflow
+# pattern). Run 3 re-runs to land the JSON on the gate-results branch.
 
 name: netbird-dry-run
 
@@ -41,6 +41,13 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
+      # NOTE (run 2 lesson): the publish step needs a git checkout — without
+      # actions/checkout there is no .git directory at all. And the Copy-Item
+      # is redundant: after `git checkout gate-results` the untracked JSON
+      # stays in place, so `git add -f` stages it directly (same pattern as
+      # the windows-proof-gate v2 publish step).
+      - uses: actions/checkout@v4
+
       - name: Install NetBird (winget, hash-verified)
         shell: pwsh
         run: |
@@ -105,7 +112,6 @@ jobs:
           git config user.email "bimo-pc-agent@local"
           git fetch origin gate-results --depth 1
           git checkout gate-results
-          Copy-Item netbird-dry-run.json -Destination . -Force
           git add -f netbird-dry-run.json
           git commit -m "netbird dry-run: install + service + CLI (no join)" --allow-empty
           git push origin gate-results
