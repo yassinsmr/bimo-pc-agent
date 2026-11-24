@@ -1,1 +1,1 @@
-{"check":"gcap","status":"pass","ts_unix":1795542399,"details":{"picker":false,"width":1024,"height":768,"first_frame_ms":153,"file":"spike-gcap.png","bytes":270782,"note":"Graphics Capture from primary monitor without picker"}}
+{"check":"gcap","status":"pass","ts_unix":1795542787,"details":{"picker":false,"width":1024,"height":768,"first_frame_ms":257,"file":"spike-gcap.png","bytes":269600,"note":"Graphics Capture from primary monitor without picker"}}
