@@ -1,0 +1,39 @@
+[package]
+name = "bimo-eye"
+version = "0.1.0"
+edition = "2021"
+description = "BIMO PC agent — the Eye: local event log, file watcher, hash worker (Track A Unit 2 safe core)"
+license = "MIT"
+
+# Standalone crate on purpose (cycle 14): it builds on its own so the
+# browser can upload it without editing any existing repo file.
+# Integration step (after the block lifts): add `crates/bimo-eye` to the
+# workspace members in the root Cargo.toml and remove the [workspace]
+# table below.
+[workspace]
+
+[lib]
+name = "bimo_eye"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bimo-eye-self-test"
+path = "src/bin/self_test.rs"
+
+[dependencies]
+serde_json = "1"
+sha2 = "0.10"
+notify = "7"
+notify-debouncer-full = "0.4" # pairs with notify 7 (its own dependency)
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_Security_Cryptography",
+  "Win32_System_ProcessStatus",
+  "Win32_System_Threading",
+] }
+
+[profile.release]
+strip = true
