@@ -30,6 +30,21 @@ struct Check {
     detail: String,
 }
 
+/// Text fields a check may match against: files carry `path`
+/// (renames also `from`/`to`), processes carry `exe`. Matching only
+/// `path` silently fails every process check — that bug cost the
+/// first Windows run its only failing check (cycle 14).
+fn event_text(e: &serde_json::Value) -> String {
+    let mut s = String::new();
+    for k in ["path", "exe", "from", "to"] {
+        if let Some(v) = e.get(k).and_then(|v| v.as_str()) {
+            s.push_str(v);
+            s.push(' ');
+        }
+    }
+    s.to_lowercase()
+}
+
 fn has_event(events: &[serde_json::Value], ty: &str, path_sub: Option<&str>) -> bool {
     events.iter().any(|e| {
         let t = e.get("type").and_then(|v| v.as_str()).unwrap_or("");
@@ -38,14 +53,7 @@ fn has_event(events: &[serde_json::Value], ty: &str, path_sub: Option<&str>) -> 
         }
         match path_sub {
             None => true,
-            Some(sub) => {
-                let p = e
-                    .get("path")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_lowercase();
-                p.contains(&sub.to_lowercase())
-            }
+            Some(sub) => event_text(e).contains(&sub.to_lowercase()),
         }
     })
 }
@@ -283,6 +291,11 @@ fn main() {
     );
     if cfg!(windows) {
         if notepad_started {
+            check(
+                "snapshotter alive (any proc.seen)",
+                has_event(&events, "proc.seen", None),
+                "the snapshotter must report at least one process; a dead snapshotter must not hide behind a missed Notepad".to_string(),
+            );
             check(
                 "proc.seen notepad.exe",
                 has_event(&events, "proc.seen", Some("notepad.exe")),
