@@ -1,0 +1,99 @@
+# NetBird dry-run workflow — DRAFT (prepared Cycle 7, 2026-11-24)
+# Purpose: council condition 2 for Track A Unit 1 (secure link).
+# Prove the RESERVE path (NetBird Cloud Free) is real on Windows before
+# the Legion arrives: silent install + daemon service + CLI responds,
+# WITHOUT joining any network (no setup key, no account, no credentials).
+#
+# Sources (checked 2026-11-24):
+# - docs.netbird.io/get-started/install/windows (updated 2026-09-28):
+#   EXE installer supports silent install with /S; installs to
+#   C:\Program Files\NetBird and registers the daemon as a Windows service.
+# - GitHub releases netbirdio/netbird v0.83.2 (2026-11-20):
+#   netbird_installer_0.83.2_windows_amd64.exe, SHA-256
+#   7B6A956825A35A1DE77FD2797D8E935EDF60F68EF41CAF816F1872BB4B844527.
+# - winget: `winget install --id Netbird.Netbird -e` (hash-verified).
+#
+# Method: winget first (hash-verified by Microsoft); if winget fails,
+# fall back to the official EXE from pkgs.netbird.io with /S.
+# Checks recorded in netbird-dry-run.json:
+#   installed version, service state (NetBird daemon Running?),
+#   `netbird status` output (daemon reachable, peer NOT connected),
+#   install duration. Join is NOT attempted — that needs a setup key
+#   from a NetBird account, which only Yassin creates.
+#
+# To activate: copy to .github/workflows/netbird-dry-run.yml in the
+# public repo yassinsmr/bimo-pc-agent and run it (workflow_dispatch).
+# It publishes netbird-dry-run.json to the gate-results branch, same
+# pattern as windows-proof-gate v2.
+
+name: netbird-dry-run
+
+on:
+  workflow_dispatch:
+
+jobs:
+  dry-run:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Install NetBird (winget, hash-verified)
+        shell: pwsh
+        run: |
+          $t0 = Get-Date
+          winget install --id Netbird.Netbird -e --accept-source-agreements --accept-package-agreements
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "winget failed ($LASTEXITCODE), falling back to official EXE"
+            Invoke-WebRequest -Uri "https://pkgs.netbird.io/windows/x64" -OutFile "$env:TEMP\netbird_installer.exe"
+            Start-Process -FilePath "$env:TEMP\netbird_installer.exe" -ArgumentList "/S" -Wait
+          }
+          $elapsed = (New-TimeSpan -Start $t0 -End (Get-Date)).TotalSeconds
+          "install_seconds=$elapsed" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Dry-run checks (no join, no credentials)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $svc = Get-Service -Name NetBird -ErrorAction SilentlyContinue
+          $svcState = if ($svc) { $svc.Status.ToString() } else { "missing" }
+          Start-Sleep -Seconds 10
+          $svc = Get-Service -Name NetBird -ErrorAction SilentlyContinue
+          $svcStateAfter = if ($svc) { $svc.Status.ToString() } else { "missing" }
+          $version = (& netbird version 2>&1 | Out-String).Trim()
+          $statusOut = (& netbird status 2>&1 | Out-String).Trim()
+          $statusCode = $LASTEXITCODE
+          $result = @{
+            dry_run = "netbird-install-service-cli"
+            version = $version
+            service_before_wait = $svcState
+            service_after_10s = $svcStateAfter
+            status_exit_code = $statusCode
+            status_output = $statusOut
+            install_seconds = [double]$env:install_seconds
+            joined_network = $false
+          } | ConvertTo-Json -Depth 3
+          $result | Out-File -FilePath netbird-dry-run.json -Encoding utf8
+          Write-Host $result
+          # Pass criteria: service Running AND CLI answers (status exit 0
+          # means daemon reachable; "not connected" is EXPECTED without a
+          # setup key). Join is out of scope for this dry run.
+          if ($svcStateAfter -ne "Running") { Write-Error "NetBird service not Running: $svcStateAfter"; exit 1 }
+          if ($statusCode -ne 0) { Write-Error "netbird status failed (daemon unreachable)"; exit 1 }
+
+      - name: Upload dry-run results
+        uses: actions/upload-artifact@v4
+        with:
+          name: netbird-dry-run
+          path: netbird-dry-run.json
+          retention-days: 30
+
+      - name: Publish results to gate-results branch
+        shell: pwsh
+        run: |
+          git config user.name "bimo-pc-agent"
+          git config user.email "bimo-pc-agent@local"
+          git fetch origin gate-results --depth 1
+          git checkout gate-results
+          Copy-Item netbird-dry-run.json -Destination . -Force
+          git add -f netbird-dry-run.json
+          git commit -m "netbird dry-run: install + service + CLI (no join)" --allow-empty
+          git push origin gate-results
