@@ -111,12 +111,22 @@ jobs:
         run: |
           git config user.name "bimo-gate"
           git config user.email "bimo-gate@local"
+          # The result files are untracked in the working tree, and the
+          # spike-results branch already tracks files of the same names:
+          # checking the branch out would abort ("would be overwritten").
+          # Move results aside first, check out, move them back.
+          # (Fixed cycle 14: runs 45447770210 + 45441211553 failed here.)
+          mkdir -p /tmp/spike-publish
+          for f in spike-results.json spike-gcap.json spike-dxgi.json spike-fullscreen.json spike-hook.json defender-before.json defender-after.json spike-gcap.png spike-dxgi.png spike-fullscreen.png; do
+            [ -f "$f" ] && mv -f "$f" /tmp/spike-publish/
+          done
           git fetch origin spike-results || true
           if git rev-parse --verify origin/spike-results >/dev/null 2>&1; then
             git checkout spike-results
           else
             git checkout -B spike-results
           fi
+          mv -f /tmp/spike-publish/* . 2>/dev/null || true
           git add -f spike-results.json spike-gcap.json spike-dxgi.json spike-fullscreen.json spike-hook.json defender-before.json defender-after.json || true
           git add -f spike-gcap.png spike-dxgi.png spike-fullscreen.png || true
           if git diff --cached --quiet; then

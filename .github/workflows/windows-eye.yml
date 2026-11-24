@@ -69,12 +69,20 @@ jobs:
         run: |
           git config user.name "bimo-gate"
           git config user.email "bimo-gate@local"
+          # The result file is untracked in the working tree, and the
+          # spike-results branch already tracks a file of the same name:
+          # checking the branch out would abort ("would be overwritten").
+          # Move results aside first, check out, move them back.
+          # (Fixed cycle 14: runs 45447770210 + 45441211553 failed here.)
+          mkdir -p /tmp/eye-publish
+          mv -f eye-self-test.json /tmp/eye-publish/ || true
           git fetch origin spike-results || true
           if git rev-parse --verify origin/spike-results >/dev/null 2>&1; then
             git checkout spike-results
           else
             git checkout -B spike-results
           fi
+          mv -f /tmp/eye-publish/eye-self-test.json . || true
           git add -f eye-self-test.json || true
           if git diff --cached --quiet; then
             echo "no eye results to commit"
