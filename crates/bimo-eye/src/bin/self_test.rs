@@ -98,6 +98,25 @@ fn main() {
     let mut notes: Vec<String> = Vec::new();
     let mut fail = false;
 
+    // Council condition 2 — prove the fail-closed path BEFORE the eye
+    // starts. The test seam (BIMO_EYE_FORCE_CRYPTO_FAIL=1) simulates a
+    // DPAPI failure on any platform; the same branches run for a real
+    // failure. Plaintext in this throwaway test dir is an explicit
+    // opt-in, restored before the eye starts.
+    std::env::remove_var("BIMO_EYE_FORCE_CRYPTO_FAIL");
+    std::env::set_var("BIMO_EYE_PLAINTEXT_OK", "1");
+    let fail_closed_ok = {
+        use bimo_eye::crypto::{detect_mode, protect_line, CryptoMode};
+        std::env::set_var("BIMO_EYE_FORCE_CRYPTO_FAIL", "1");
+        std::env::remove_var("BIMO_EYE_PLAINTEXT_OK");
+        let refused = detect_mode().is_err()
+            && protect_line("{\"type\":\"x\"}", CryptoMode::Dpapi).is_err();
+        std::env::remove_var("BIMO_EYE_FORCE_CRYPTO_FAIL");
+        std::env::set_var("BIMO_EYE_PLAINTEXT_OK", "1");
+        let opt_in_ok = detect_mode().map(|m| m == CryptoMode::Plain).unwrap_or(false);
+        refused && opt_in_ok
+    };
+
     let downloads = work.join("Downloads");
     let desktop = work.join("Desktop");
     let documents = work.join("Documents");
@@ -143,6 +162,20 @@ fn main() {
     write_file(&notes_file, b"hello from the eye self-test\n");
     std::thread::sleep(Duration::from_secs(4));
 
+    // 3b. Council condition 4 — a file that changes AFTER it was
+    // hashed must be re-hashed: append to setup.exe and wait for the
+    // watcher to report a new completion + a new file.hash.
+    {
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&setup)
+            .expect("reopen setup.exe");
+        f.write_all(b"changed-after-first-hash")
+            .expect("append to setup.exe");
+        drop(f);
+    }
+    std::thread::sleep(Duration::from_secs(5));
+
     // 4. Notepad (Windows only) — kept open 8 s so the 3 s snapshotter
     //    ticks see it at least twice.
     #[cfg(windows)]
@@ -173,14 +206,30 @@ fn main() {
     std::thread::sleep(Duration::from_secs(3));
 
     // 5. stop-file test: while stopped, a new file must NOT be logged.
+    // Council condition 5 — the stop must leave a trace OUTSIDE the
+    // log: heartbeat.json disappears and eye.stopped appears; on
+    // resume the heartbeat file comes back with a fresh timestamp.
+    let heartbeat_file = data_dir.join("heartbeat.json");
+    let stopped_marker = data_dir.join("eye.stopped");
+    let heartbeat_before_stop = file_mtime(&heartbeat_file);
     let stop_file = data_dir.join("eye.stop");
     let _ = std::fs::write(&stop_file, b"stop");
-    std::thread::sleep(Duration::from_secs(2));
+    std::thread::sleep(Duration::from_secs(3));
+    let heartbeat_gone_while_stopped =
+        !heartbeat_file.exists() && stopped_marker.exists();
     let blocked = desktop.join("blocked.txt");
     write_file(&blocked, b"this must not appear in the log\n");
     std::thread::sleep(Duration::from_secs(3));
     let _ = std::fs::remove_file(&stop_file);
-    std::thread::sleep(Duration::from_secs(2));
+    std::thread::sleep(Duration::from_secs(7));
+    let heartbeat_back_after_resume = match (
+        heartbeat_before_stop,
+        file_mtime(&heartbeat_file),
+    ) {
+        (Some(before), Some(after)) => after > before,
+        (None, Some(_)) => true, // no heartbeat before, one now: resumed
+        _ => false,
+    };
 
     handle.stop();
 
@@ -242,9 +291,36 @@ fn main() {
         "installer inference must stay low-confidence".to_string(),
     );
     check(
+        "crypto fails closed (simulated DPAPI failure)",
+        fail_closed_ok,
+        "without opt-in, detection refuses and protect_line errors; with opt-in, plaintext is explicit".to_string(),
+    );
+    check(
         "file.hash setup.exe",
         has_event(&events, "file.hash", Some("setup.exe")),
         "background hash worker must hash the installer".to_string(),
+    );
+    // Council condition 4: a later change must produce a NEW hash.
+    let setup_hashes: Vec<&str> = events
+        .iter()
+        .filter_map(|e| {
+            if e.get("type").and_then(|v| v.as_str()) != Some("file.hash") {
+                return None;
+            }
+            let p = e.get("path").and_then(|v| v.as_str())?;
+            if !p.to_lowercase().contains("setup.exe") {
+                return None;
+            }
+            e.get("sha256").and_then(|v| v.as_str())
+        })
+        .collect();
+    check(
+        "file re-hashed after later change",
+        setup_hashes.len() >= 2 && setup_hashes.first() != setup_hashes.last(),
+        format!(
+            "{} file.hash events for setup.exe; first hash must differ from last",
+            setup_hashes.len()
+        ),
     );
     check(
         "file.completed notes.txt",
@@ -289,6 +365,23 @@ fn main() {
         }),
         "removing eye.stop must resume the eye".to_string(),
     );
+    // Council condition 5: the stop must be detectable outside the log.
+    check(
+        "heartbeat file present before stop",
+        heartbeat_before_stop.is_some(),
+        "heartbeat.json must exist while the eye runs".to_string(),
+    );
+    check(
+        "stop leaves an outside-the-log trace",
+        heartbeat_gone_while_stopped,
+        "while stopped: heartbeat.json gone and eye.stopped present".to_string(),
+    );
+    check(
+        "heartbeat file fresh again after resume",
+        heartbeat_back_after_resume,
+        "heartbeat.json must return with a newer timestamp after the stop file is removed"
+            .to_string(),
+    );
     if cfg!(windows) {
         if notepad_started {
             check(
@@ -311,7 +404,7 @@ fn main() {
     }
     if crypto == "plain" {
         notes.push(
-            "crypto is plain (DPAPI unavailable on this runner): allowed fallback per spec section 6, encryption stays an arrival-day item"
+            "crypto is plain: explicit opt-in BIMO_EYE_PLAINTEXT_OK=1 recorded in the log (council condition 2); DPAPI stays an arrival-day item"
                 .to_string(),
         );
     }
@@ -335,6 +428,10 @@ fn write_file(path: &Path, data: &[u8]) {
     let mut f = std::fs::File::create(path).expect("create test file");
     f.write_all(data).expect("write test file");
     drop(f);
+}
+
+fn file_mtime(path: &Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).ok()?.modified().ok()
 }
 
 #[cfg(windows)]
