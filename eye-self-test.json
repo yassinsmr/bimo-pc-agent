@@ -1,0 +1,74 @@
+{
+  "chain_valid": true,
+  "checks": [
+    {
+      "detail": "the eye must record its start",
+      "name": "agent.start present",
+      "status": "pass"
+    },
+    {
+      "detail": "debounced completion of the fake installer",
+      "name": "file.completed setup.exe",
+      "status": "pass"
+    },
+    {
+      "detail": "installer inference must stay low-confidence",
+      "name": "install.detected setup.exe confidence low",
+      "status": "pass"
+    },
+    {
+      "detail": "background hash worker must hash the installer",
+      "name": "file.hash setup.exe",
+      "status": "pass"
+    },
+    {
+      "detail": "debounced completion of a plain file",
+      "name": "file.completed notes.txt",
+      "status": "pass"
+    },
+    {
+      "detail": "at least one heartbeat in ~25 s with a 5 s interval",
+      "name": "eye.heartbeat present",
+      "status": "pass"
+    },
+    {
+      "detail": "164 lines verified",
+      "name": "hash chain valid",
+      "status": "pass"
+    },
+    {
+      "detail": "the stop file must stop the eye and be recorded",
+      "name": "agent.stop eye.stop-file present",
+      "status": "pass"
+    },
+    {
+      "detail": "blocked.txt must not appear while eye.stop exists",
+      "name": "file created while stopped is NOT logged",
+      "status": "pass"
+    },
+    {
+      "detail": "removing eye.stop must resume the eye",
+      "name": "eye resumes after stop file removed",
+      "status": "pass"
+    },
+    {
+      "detail": "snapshotter must see Notepad while it runs",
+      "name": "proc.seen notepad.exe",
+      "status": "fail"
+    }
+  ],
+  "crypto": "dpapi",
+  "events_total": 164,
+  "honest_limits": [
+    "runner numbers do not prove device performance (flawhunt 11-z)",
+    "no real fullscreen game on the runner; game capture is decided on the Legion (second gate)",
+    "Defender realtime was off on the runner in the spike; no Defender check runs here"
+  ],
+  "notes": [],
+  "resources": {
+    "cpu_seconds": 0.0625,
+    "elapsed_seconds": 28.0568583,
+    "rss_kb": 7236
+  },
+  "verdict": "fail"
+}
