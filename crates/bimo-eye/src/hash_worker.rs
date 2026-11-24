@@ -14,7 +14,7 @@
 //! forwards it here again, so the log carries the new hash next to
 //! the old one instead of silently keeping a stale value.
 
-use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -75,12 +75,30 @@ pub fn start_hash_worker(
     stop: Arc<AtomicBool>,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
-        let mut attempts: HashMap<PathBuf, u8> = HashMap::new();
+        // Deferred files (still changing at hash time) retry THEMSELVES
+        // here after 1 s — the retry must never depend on the watcher
+        // emitting another `file.completed`, which may never come
+        // (cycle 15: the Windows run hashed setup.exe once only because
+        // the deferred second hash had no retry of its own).
+        // Entry: (path, retry-at, attempts-so-far).
+        let mut pending: VecDeque<(PathBuf, std::time::Instant, u8)> =
+            VecDeque::new();
         while !stop.load(Ordering::Relaxed) {
-            let path = match rx.recv_timeout(std::time::Duration::from_millis(200)) {
-                Ok(p) => p,
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            // A due retry takes precedence over the channel.
+            let mut next: Option<(PathBuf, u8)> = None;
+            if let Some((_, due, _)) = pending.front() {
+                if *due <= std::time::Instant::now() {
+                    let (p, _, n) = pending.pop_front().unwrap();
+                    next = Some((p, n));
+                }
+            }
+            let (path, mut attempts) = match next {
+                Some(v) => v,
+                None => match rx.recv_timeout(std::time::Duration::from_millis(200)) {
+                    Ok(p) => (p, 0u8),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                },
             };
             if game_mode.load(Ordering::Relaxed) {
                 continue; // hashing is off while gaming (condition 12)
@@ -103,22 +121,22 @@ pub fn start_hash_worker(
                 continue;
             }
             // Stability gate (council condition 4): hash only a file
-            // that stopped changing; otherwise defer and retry.
+            // that stopped changing; otherwise defer and retry from
+            // our own queue — never from the watcher's next event.
             if !file_is_stable(&path) {
-                let n = attempts.entry(path.clone()).or_insert(0);
-                *n += 1;
-                if *n < MAX_STABILITY_ATTEMPTS {
+                attempts += 1;
+                if attempts < MAX_STABILITY_ATTEMPTS {
                     let _ = tx.send(EyeEvent::Warning {
                         message: format!(
-                            "hash deferred: file still changing: {} (attempt {n}/{MAX_STABILITY_ATTEMPTS})",
+                            "hash deferred: file still changing: {} (attempt {attempts}/{MAX_STABILITY_ATTEMPTS})",
                             path.display()
                         ),
                     });
-                    // The retry rides on the watcher's next
-                    // `file.completed` for this path (a file that is
-                    // still changing keeps emitting Modify events);
-                    // the attempt count is KEPT so the third deferral
-                    // becomes a named skip instead of an endless loop.
+                    pending.push_back((
+                        path,
+                        std::time::Instant::now() + std::time::Duration::from_secs(1),
+                        attempts,
+                    ));
                     continue;
                 }
                 let _ = tx.send(EyeEvent::Warning {
@@ -127,10 +145,8 @@ pub fn start_hash_worker(
                         path.display()
                     ),
                 });
-                attempts.remove(&path);
                 continue;
             }
-            attempts.remove(&path);
             match hash_file(&path) {
                 Ok(sha) => {
                     let _ = tx.send(EyeEvent::FileHash {
