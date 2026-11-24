@@ -1,1 +1,1 @@
-{"check":"proc-link","status":"pass","ts_unix":1795551687,"details":{"total_events":10,"links_verified_live":10,"bad":0,"note":"each live event re-checked against Toolhelp while its process was alive; post-kill close events are shape-checked only"}}
+{"check":"proc-link","status":"pass","ts_unix":1795552405,"details":{"total_events":10,"links_verified_live":10,"bad":0,"note":"each live event re-checked against Toolhelp while its process was alive; post-kill close events are shape-checked only"}}

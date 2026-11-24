@@ -1,1 +1,1 @@
-{"check":"titles-flag-off","status":"pass","ts_unix":1795551704,"details":{"full_titles_enabled":false,"getwindowtext_calls":0,"lines_scanned":99,"titles_found":0,"note":"eye.full-titles is off by default; the tracker never calls GetWindowText while it is off"}}
+{"check":"titles-flag-off","status":"pass","ts_unix":1795552422,"details":{"full_titles_enabled":false,"getwindowtext_calls":0,"lines_scanned":100,"titles_found":0,"note":"eye.full-titles is off by default; the tracker never calls GetWindowText while it is off"}}
