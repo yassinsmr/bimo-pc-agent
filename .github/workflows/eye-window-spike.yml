@@ -1,0 +1,156 @@
+# Eye window spike workflow — Track A Unit 2 (the Eye), council condition 2.
+# Purpose: prove on REAL Windows, before building window events into
+# the eye unit (spec track-a-unit2-eye-window-spike.md):
+#   1. SetWinEventHook fires real events (Notepad + calc open/close).
+#   2. Every event links a correct exe + PID (GetWindowThreadProcessId
+#      + Toolhelp32Snapshot).
+#   3. A killed hook is re-registered by the internal watchdog and
+#      events flow again in under 10 s.
+#   4. With eye.full-titles off (the default), 0 full window titles
+#      appear in the trial log — the spike never calls GetWindowText.
+# Failure of any check = spike fails = the window-events build stops
+# (same rule as the eye-spike gate, council condition 2 on Unit 2).
+# A headless-runner failure is recorded as such in the JSON, not
+# silently treated as a design failure.
+#
+# DRAFT (cycle 16, 2026-11-24) — the window spike is a standalone crate
+# (crates/bimo-wintrack, own [workspace] table) so it builds without
+# touching the workspace root. The binary is eye-window-spike.exe.
+# Copy to bimo-pc-agent/.github/workflows/eye-window-spike.yml.
+#
+# Lessons reused (cycles 2-15): permissions: contents: write (else the
+# push fails 403), actions/checkout present in the publish step,
+# if: always() on publish, each check continue-on-error so one failure
+# cannot hide the others, results moved to /tmp before checking out
+# the results branch (cycle-14 fix: untracked files would otherwise
+# abort the checkout).
+
+name: eye-window-spike
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "crates/bimo-wintrack/**"
+      - ".github/workflows/eye-window-spike.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  spike:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable + MSVC target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build window spike for Windows
+        run: |
+          cd crates/bimo-wintrack
+          cargo build --release --target x86_64-pc-windows-msvc --locked
+
+      - name: Defender baseline (before)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $detections = 0
+          $available = $true
+          try {
+            $t = Get-MpThreatDetection -ErrorAction Stop
+            if ($null -ne $t) { $detections = @($t).Count }
+          } catch { $available = $false }
+          $rt = $false
+          try { $rt = (Get-MpComputerStatus -ErrorAction Stop).RealTimeProtectionEnabled } catch { $available = $false }
+          @{ detections = $detections; realtime = $rt; available = $available } | ConvertTo-Json | Out-File -FilePath defender-before.json -Encoding utf8
+          Get-Content defender-before.json
+
+      - name: Check 1 — hook fires (Notepad + calc)
+        continue-on-error: true
+        timeout-minutes: 3
+        run: .\crates\bimo-wintrack\target\x86_64-pc-windows-msvc\release\eye-window-spike.exe --check hook-fires
+
+      - name: Check 2 — proc-link (exe + PID per event)
+        continue-on-error: true
+        timeout-minutes: 3
+        run: .\crates\bimo-wintrack\target\x86_64-pc-windows-msvc\release\eye-window-spike.exe --check proc-link
+
+      - name: Check 3 — hook resilience (kill + recover < 10 s)
+        continue-on-error: true
+        timeout-minutes: 3
+        run: .\crates\bimo-wintrack\target\x86_64-pc-windows-msvc\release\eye-window-spike.exe --check hook-resilience
+
+      - name: Check 4 — titles flag off (0 titles in trial log)
+        continue-on-error: true
+        timeout-minutes: 3
+        run: .\crates\bimo-wintrack\target\x86_64-pc-windows-msvc\release\eye-window-spike.exe --check titles-flag-off
+
+      - name: Defender after
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $detections = 0
+          $available = $true
+          try {
+            $t = Get-MpThreatDetection -ErrorAction Stop
+            if ($null -ne $t) { $detections = @($t).Count }
+          } catch { $available = $false }
+          $rt = $false
+          try { $rt = (Get-MpComputerStatus -ErrorAction Stop).RealTimeProtectionEnabled } catch { $available = $false }
+          @{ detections = $detections; realtime = $rt; available = $available } | ConvertTo-Json | Out-File -FilePath defender-after.json -Encoding utf8
+          Get-Content defender-after.json
+
+      - name: Merge window spike results
+        continue-on-error: true
+        run: .\crates\bimo-wintrack\target\x86_64-pc-windows-msvc\release\eye-window-spike.exe --merge
+
+      - name: Publish window spike results to spike-results branch
+        if: always()
+        shell: bash
+        run: |
+          git config user.name "bimo-gate"
+          git config user.email "bimo-gate@local"
+          # The result files are untracked in the working tree, and the
+          # spike-results branch already tracks files of the same names:
+          # checking the branch out would abort ("would be overwritten").
+          # Move results aside first, check out, move them back.
+          # (Fixed cycle 14: runs 45447770210 + 45441211553 failed here.)
+          mkdir -p /tmp/winspike-publish
+          for f in window-spike-results.json winspike-hook-fires.json winspike-proc-link.json winspike-hook-resilience.json winspike-titles-flag-off.json winspike-trial.jsonl defender-before.json defender-after.json; do
+            [ -f "$f" ] && mv -f "$f" /tmp/winspike-publish/
+          done
+          git fetch origin spike-results || true
+          if git rev-parse --verify origin/spike-results >/dev/null 2>&1; then
+            git checkout spike-results
+          else
+            git checkout -B spike-results
+          fi
+          mv -f /tmp/winspike-publish/* . 2>/dev/null || true
+          git add -f window-spike-results.json winspike-hook-fires.json winspike-proc-link.json winspike-hook-resilience.json winspike-titles-flag-off.json winspike-trial.jsonl defender-before.json defender-after.json || true
+          if git diff --cached --quiet; then
+            echo "no window spike results to commit"
+          else
+            git commit -m "window spike results $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            git push origin spike-results
+          fi
+
+      - name: Upload window spike results + binary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eye-window-spike
+          path: |
+            window-spike-results.json
+            winspike-hook-fires.json
+            winspike-proc-link.json
+            winspike-hook-resilience.json
+            winspike-titles-flag-off.json
+            winspike-trial.jsonl
+            defender-before.json
+            defender-after.json
+            crates/bimo-wintrack/target/x86_64-pc-windows-msvc/release/eye-window-spike.exe
+          retention-days: 30
