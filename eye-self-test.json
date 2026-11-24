@@ -27,14 +27,14 @@
       "status": "pass"
     },
     {
-      "detail": "1 file.completed events for setup.exe; the change must be reported",
+      "detail": "3 file.completed events for setup.exe; the change must be reported",
       "name": "second completion observed for setup.exe",
-      "status": "fail"
+      "status": "pass"
     },
     {
-      "detail": "1 file.hash events for setup.exe; first hash must differ from last",
+      "detail": "3 file.hash events for setup.exe; first hash must differ from last",
       "name": "file re-hashed after later change",
-      "status": "fail"
+      "status": "pass"
     },
     {
       "detail": "debounced completion of a plain file",
@@ -47,7 +47,7 @@
       "status": "pass"
     },
     {
-      "detail": "172 lines verified",
+      "detail": "160 lines verified",
       "name": "hash chain valid",
       "status": "pass"
     },
@@ -93,7 +93,7 @@
     }
   ],
   "crypto": "dpapi",
-  "events_total": 172,
+  "events_total": 160,
   "honest_limits": [
     "runner numbers do not prove device performance (flawhunt 11-z)",
     "no real fullscreen game on the runner; game capture is decided on the Legion (second gate)",
@@ -101,9 +101,9 @@
   ],
   "notes": [],
   "resources": {
-    "cpu_seconds": 0.125,
-    "elapsed_seconds": 39.0516171,
-    "rss_kb": 7856
+    "cpu_seconds": 0.078125,
+    "elapsed_seconds": 39.0646582,
+    "rss_kb": 7964
   },
-  "verdict": "fail"
+  "verdict": "pass"
 }
