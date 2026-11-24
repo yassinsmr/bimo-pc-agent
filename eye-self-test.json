@@ -47,7 +47,7 @@
       "status": "pass"
     },
     {
-      "detail": "165 lines verified",
+      "detail": "166 lines verified",
       "name": "hash chain valid",
       "status": "pass"
     },
@@ -93,7 +93,7 @@
     }
   ],
   "crypto": "dpapi",
-  "events_total": 165,
+  "events_total": 166,
   "honest_limits": [
     "runner numbers do not prove device performance (flawhunt 11-z)",
     "no real fullscreen game on the runner; game capture is decided on the Legion (second gate)",
@@ -102,8 +102,8 @@
   "notes": [],
   "resources": {
     "cpu_seconds": 0.046875,
-    "elapsed_seconds": 39.056714,
-    "rss_kb": 7844
+    "elapsed_seconds": 39.0539318,
+    "rss_kb": 7892
   },
   "verdict": "fail"
 }
