@@ -1,13 +1,19 @@
 //! eye-window-spike — proof spike for Track A Unit 2 (the Eye),
 //! window events (spec `track-a-unit2-eye-window-spike.md`).
 //!
-//! Four independent checks, one process invocation each, so a hang or
-//! failure in one cannot block the others. Each invocation writes one
-//! fragment `winspike-<check>.json`; `--merge` combines the fragments
-//! plus the Defender before/after files into
-//! `window-spike-results.json`. Window events also append to the
-//! trial log `winspike-trial.jsonl` in the eye format (`seq` + `ts` +
-//! `prev_hash` + `hash`).
+//! Three core checks + one regression guard, one process invocation
+//! each, so a hang or failure in one cannot block the others. Each
+//! invocation writes one fragment `winspike-<check>.json`; `--merge`
+//! combines the fragments plus the Defender before/after files into
+//! `window-spike-results.json`. Defender is informational only
+//! (council condition 2): it can never flip the verdict. Window
+//! events also append to the trial log `winspike-trial.jsonl` in the
+//! eye format (`schema` + `seq` + `ts` + `prev_hash` + `hash`).
+//!
+//! `--merge` is the gate: it exits 1 on any failure, and the CI
+//! workflow lets that failure fail the run (council condition 3).
+//! A missing fragment, a failed check, or a trial-log line with a
+//! missing/unknown schema version all drop the run (fail-closed).
 //!
 //! Usage (on real Windows):
 //!   eye-window-spike --check hook-fires
@@ -27,17 +33,20 @@
 //!   as such, not as a design failure.
 //! - No real exclusive-fullscreen game exists on the runner; the
 //!   real-game case is decided on the Legion (second gate).
+//! - Runner numbers never prove device performance (tagged
+//!   `perf_tag` in the merged JSON, council condition 4).
 //! - On non-Windows builds every check writes "skipped", not "fail":
 //!   the spike cannot prove anything there, and the merge verdict is
 //!   "skipped" so local plumbing runs stay distinguishable from a
 //!   real Windows pass/fail.
 
 use bimo_wintrack::{
-    exe_family_pids, tracker_supported, verify_proc_link, TrialLog, WinEvent, WinEventKind,
-    WinTrack,
+    exe_family_pids, tracker_supported, verify_log_file, verify_proc_link, TrialLog, WinEvent,
+    WinEventKind, WinTrack,
 };
 use std::collections::HashSet;
 use std::fs;
+use std::path::Path;
 use std::sync::mpsc::{channel, Receiver};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -433,6 +442,20 @@ fn check_hook_resilience() -> i32 {
     let after_ms = match recovered_after_ms {
         Some(ms) => ms,
         None => {
+            // Council condition 3: a failed recovery must leave an
+            // explicit failure EVENT in the trial log, not just a
+            // failed fragment — the log reader must see the failure.
+            log.write(&WinEvent {
+                kind: WinEventKind::HookRecoveryFailed,
+                pid: 0,
+                exe: String::new(),
+                hwnd: 0,
+                after_ms: Some(10_000),
+                reason: Some(
+                    "no hook.recovered within 10 s of the kill — watchdog did not re-register"
+                        .to_string(),
+                ),
+            });
             track.stop();
             return fail(
                 name,
@@ -479,11 +502,25 @@ fn check_hook_resilience() -> i32 {
 }
 
 // ---------------------------------------------------------------- Check 4
+// Regression guard (council condition 4): runs on every CI push,
+// always — it reads the trial log the other checks wrote.
 fn check_titles_flag_off() -> i32 {
     let name = "titles-flag-off";
     if !tracker_supported() {
         return skipped(name, "not a Windows build — no trial log can exist here");
     }
+    // Council condition 1 (mechanical): the trial log must carry a
+    // valid schema version on every line — fail-closed, before the
+    // titles audit reads anything from it.
+    let schema_lines = match verify_log_file(Path::new(TRIAL_LOG)) {
+        Ok(n) => n,
+        Err(e) => {
+            return fail(
+                name,
+                &format!("trial log schema invalid (fail-closed): {}", e),
+            )
+        }
+    };
     let text = match fs::read_to_string(TRIAL_LOG) {
         Ok(t) => t,
         Err(_) => {
@@ -507,8 +544,8 @@ fn check_titles_flag_off() -> i32 {
         }
     }
     let details = format!(
-        "{{\"full_titles_enabled\":false,\"getwindowtext_calls\":0,\"lines_scanned\":{},\"titles_found\":{},\"note\":\"eye.full-titles is off by default; the tracker never calls GetWindowText while it is off\"}}",
-        lines, titles
+        "{{\"full_titles_enabled\":false,\"getwindowtext_calls\":0,\"schema_lines_verified\":{},\"lines_scanned\":{},\"titles_found\":{},\"note\":\"eye.full-titles is off by default; the tracker never calls GetWindowText while it is off; every trial-log line carries schema 1 (verified above)\"}}",
+        schema_lines, lines, titles
     );
     if lines == 0 {
         return fail(name, "trial log is empty — no events to audit");
@@ -524,14 +561,21 @@ fn check_titles_flag_off() -> i32 {
 }
 
 // ---------------------------------------------------------------- Merge
+// The gate (council condition 3): exit 1 on any failure, and the CI
+// workflow lets that exit fail the run — a failed check drops the
+// run, it is never papered over by `continue-on-error`.
 fn merge() -> i32 {
+    merge_in(Path::new("."))
+}
+
+fn merge_in(dir: &Path) -> i32 {
     let mut checks: Vec<(String, String)> = Vec::new();
     let wanted = ["hook-fires", "proc-link", "hook-resilience", "titles-flag-off"];
     let mut missing: Vec<&str> = Vec::new();
     let mut any_fail = false;
     let mut any_skipped = false;
     for name in wanted {
-        let path = format!("winspike-{}.json", name);
+        let path = dir.join(format!("winspike-{}.json", name));
         match fs::read_to_string(&path) {
             Ok(content) => {
                 if content.contains("\"status\":\"fail\"") {
@@ -549,10 +593,13 @@ fn merge() -> i32 {
         }
     }
 
+    // Defender is informational only (council condition 2): its
+    // result is recorded for the record, and it can NEVER flip the
+    // verdict — the realtime protection was off on the runner, so
+    // the count proves nothing either way.
     let defender_note;
-    let mut defender_ok = true;
-    let before = fs::read_to_string("defender-before.json").ok();
-    let after = fs::read_to_string("defender-after.json").ok();
+    let before = fs::read_to_string(dir.join("defender-before.json")).ok();
+    let after = fs::read_to_string(dir.join("defender-after.json")).ok();
     match (before, after) {
         (Some(b), Some(a)) => {
             let count = |s: &str| -> Option<i64> {
@@ -565,9 +612,8 @@ fn merge() -> i32 {
             };
             match (count(&b), count(&a)) {
                 (Some(bc), Some(ac)) => {
-                    defender_ok = ac <= bc;
                     defender_note = format!(
-                        "Defender detections before={} after={} (new={})",
+                        "Defender detections before={} after={} (new={}) — informational only, suspended from evidence until a realtime-on scan (council condition 2)",
                         bc,
                         ac,
                         ac - bc
@@ -575,17 +621,41 @@ fn merge() -> i32 {
                 }
                 _ => {
                     defender_note =
-                        "Defender JSON present but detections count unparsable".to_string();
+                        "Defender JSON present but detections count unparsable — informational only"
+                            .to_string();
                 }
             }
         }
         _ => {
             defender_note =
-                "Defender before/after files missing — Defender verdict unknown".to_string();
+                "Defender before/after files missing — Defender verdict unknown (informational only)"
+                    .to_string();
         }
     }
-    if !defender_ok {
+
+    // Trial-log schema, verified at the gate too (council condition
+    // 1, fail-closed): if checks really ran, the log must exist and
+    // every line must carry schema 1. A skipped (non-Windows) run
+    // has no log and skips this verification.
+    let trial_log_schema;
+    let trial_path = dir.join(TRIAL_LOG);
+    if trial_path.exists() {
+        match verify_log_file(&trial_path) {
+            Ok(n) => {
+                trial_log_schema =
+                    format!("verified: {} lines, schema 1", n);
+            }
+            Err(e) => {
+                any_fail = true;
+                trial_log_schema = format!("INVALID (fail-closed): {}", e);
+            }
+        }
+    } else if any_skipped && !any_fail && missing.is_empty() {
+        trial_log_schema = "absent — all checks skipped, nothing to verify".to_string();
+    } else {
         any_fail = true;
+        trial_log_schema =
+            "missing — trial log absent while checks ran (schema unverified)".to_string();
     }
 
     let verdict = if any_fail {
@@ -615,10 +685,18 @@ fn merge() -> i32 {
     }
     body.push_str("],\"defender\":\"");
     body.push_str(&json_escape(&defender_note));
-    body.push_str("\",\"naming_frozen\":\"app.open/app.close/app.focus (hook) vs proc.seen/proc.gone (snapshotter); no full window titles while eye.full-titles is off\",\"honest_limits\":\"runner has no real display; no real exclusive-fullscreen game on the runner — real-game capture is decided on the Legion; runner numbers never prove device performance\"}");
-    match fs::write("window-spike-results.json", &body) {
+    body.push_str("\",\"trial_log_schema\":\"");
+    body.push_str(&json_escape(&trial_log_schema));
+    // Council condition 4: runner measurements are tagged, in the
+    // JSON itself, as never proving device performance.
+    body.push_str("\",\"perf_tag\":\"runner-only — does not prove device performance\"");
+    body.push_str(",\"naming_frozen\":\"app.open/app.close/app.focus (hook) vs proc.seen/proc.gone (snapshotter); no full window titles while eye.full-titles is off\",\"honest_limits\":\"runner has no real display; no real exclusive-fullscreen game on the runner — real-game capture is decided on the Legion; runner numbers never prove device performance\"}");
+    match fs::write(dir.join("window-spike-results.json"), &body) {
         Ok(()) => {
-            eprintln!("[winspike] merge verdict: {} — {}", verdict, defender_note);
+            eprintln!(
+                "[winspike] merge verdict: {} — {} — trial log: {}",
+                verdict, defender_note, trial_log_schema
+            );
             if any_fail {
                 1
             } else {
@@ -629,5 +707,137 @@ fn merge() -> i32 {
             eprintln!("[winspike] merge failed to write window-spike-results.json: {}", e);
             1
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn fresh_dir() -> std::path::PathBuf {
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("bimo-winspike-merge-test-{}", n));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn pass_fragment(check: &str) -> String {
+        format!(
+            "{{\"check\":\"{}\",\"status\":\"pass\",\"ts_unix\":0,\"details\":{{}}}}",
+            check
+        )
+    }
+
+    fn write_all_pass(dir: &Path) {
+        for name in ["hook-fires", "proc-link", "hook-resilience", "titles-flag-off"] {
+            std::fs::write(
+                dir.join(format!("winspike-{}.json", name)),
+                pass_fragment(name),
+            )
+            .unwrap();
+        }
+        // A valid trial log: one line carrying schema 1.
+        std::fs::write(
+            dir.join(TRIAL_LOG),
+            "{\"type\":\"app.open\",\"schema\":1,\"seq\":0,\"ts\":\"2026-11-24T00:00:00Z\",\"prev_hash\":\"GENESIS\",\"hash\":\"00\"}\n",
+        )
+        .unwrap();
+    }
+
+    fn read_verdict(dir: &Path) -> String {
+        let body = std::fs::read_to_string(dir.join("window-spike-results.json")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        v["verdict"].as_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn merge_fail_drops_the_run() {
+        // Council condition 3, mechanical proof: one failed check
+        // must yield verdict "fail" AND a nonzero exit code.
+        let dir = fresh_dir();
+        write_all_pass(&dir);
+        std::fs::write(
+            dir.join("winspike-proc-link.json"),
+            "{\"check\":\"proc-link\",\"status\":\"fail\",\"ts_unix\":0,\"details\":{\"error\":\"bad link\"}}",
+        )
+        .unwrap();
+        assert_eq!(merge_in(&dir), 1);
+        assert_eq!(read_verdict(&dir), "fail");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn merge_missing_fragment_drops_the_run() {
+        let dir = fresh_dir();
+        write_all_pass(&dir);
+        std::fs::remove_file(dir.join("winspike-hook-fires.json")).unwrap();
+        assert_eq!(merge_in(&dir), 1);
+        assert_eq!(read_verdict(&dir), "fail");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn merge_pass_despite_defender_increase() {
+        // Council condition 2, mechanical proof: Defender detections
+        // rising must NOT flip a passing run — Defender is
+        // informational only.
+        let dir = fresh_dir();
+        write_all_pass(&dir);
+        std::fs::write(
+            dir.join("defender-before.json"),
+            "{\"detections\": 0, \"realtime\": false}",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("defender-after.json"),
+            "{\"detections\": 3, \"realtime\": false}",
+        )
+        .unwrap();
+        assert_eq!(merge_in(&dir), 0);
+        assert_eq!(read_verdict(&dir), "pass");
+        let body = std::fs::read_to_string(dir.join("window-spike-results.json")).unwrap();
+        assert!(body.contains("informational only"), "{}", body);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn merge_schema_invalid_drops_the_run() {
+        // Council condition 1, mechanical proof: a trial-log line
+        // without a schema field fails the run closed.
+        let dir = fresh_dir();
+        write_all_pass(&dir);
+        std::fs::write(
+            dir.join(TRIAL_LOG),
+            "{\"type\":\"app.open\",\"seq\":0,\"ts\":\"2026-11-24T00:00:00Z\"}\n",
+        )
+        .unwrap();
+        assert_eq!(merge_in(&dir), 1);
+        assert_eq!(read_verdict(&dir), "fail");
+        let body = std::fs::read_to_string(dir.join("window-spike-results.json")).unwrap();
+        assert!(body.contains("INVALID"), "{}", body);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn merge_all_skipped_stays_skipped() {
+        // Non-Windows plumbing: no trial log, all fragments skipped.
+        let dir = fresh_dir();
+        for name in ["hook-fires", "proc-link", "hook-resilience", "titles-flag-off"] {
+            std::fs::write(
+                dir.join(format!("winspike-{}.json", name)),
+                format!(
+                    "{{\"check\":\"{}\",\"status\":\"skipped\",\"ts_unix\":0,\"details\":{{}}}}",
+                    name
+                ),
+            )
+            .unwrap();
+        }
+        assert_eq!(merge_in(&dir), 0);
+        assert_eq!(read_verdict(&dir), "skipped");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

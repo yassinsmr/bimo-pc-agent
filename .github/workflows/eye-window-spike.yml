@@ -6,12 +6,23 @@
 #      + Toolhelp32Snapshot).
 #   3. A killed hook is re-registered by the internal watchdog and
 #      events flow again in under 10 s.
-#   4. With eye.full-titles off (the default), 0 full window titles
-#      appear in the trial log — the spike never calls GetWindowText.
+#   4. (Regression guard, every run — council condition 4) With
+#      eye.full-titles off (the default), 0 full window titles appear
+#      in the trial log — the spike never calls GetWindowText — and
+#      every trial-log line carries schema 1 (council condition 1).
+# Defender before/after is recorded for the record only: it NEVER
+# affects the verdict (council condition 2 — suspended from evidence
+# until a realtime-on scan exists).
 # Failure of any check = spike fails = the window-events build stops
 # (same rule as the eye-spike gate, council condition 2 on Unit 2).
+# The Merge step is the gate (council condition 3): it has NO
+# continue-on-error, so a failed merge fails the whole run. The four
+# check steps keep continue-on-error so one failure cannot hide the
+# others — all fragments still reach the merge.
 # A headless-runner failure is recorded as such in the JSON, not
 # silently treated as a design failure.
+# Runner numbers are tagged in the merged JSON (perf_tag) as never
+# proving device performance (council condition 4).
 #
 # DRAFT (cycle 16, 2026-11-24) — the window spike is a standalone crate
 # (crates/bimo-wintrack, own [workspace] table) so it builds without
@@ -54,7 +65,21 @@ jobs:
           cd crates/bimo-wintrack
           cargo build --release --target x86_64-pc-windows-msvc --locked
 
+      # Council condition 3, mechanical proof on real Windows: the
+      # unit tests assert that a failed fragment drops the merge
+      # (verdict fail + exit 1), that a Defender rise cannot flip a
+      # passing run, and that a schema-less trial-log line fails the
+      # merge closed. They run here, on the runner, not only locally.
+      - name: Unit tests (merge fail-closed + schema + Defender)
+        run: |
+          cd crates/bimo-wintrack
+          cargo test --release --target x86_64-pc-windows-msvc --locked
+
+      # Defender before/after: informational only (council condition
+      # 2). These steps can never fail the run; the merge records the
+      # counts and ignores them for the verdict.
       - name: Defender baseline (before)
+        continue-on-error: true
         shell: pwsh
         run: |
           $ErrorActionPreference = "Continue"
@@ -90,6 +115,7 @@ jobs:
         run: .\crates\bimo-wintrack\target\x86_64-pc-windows-msvc\release\eye-window-spike.exe --check titles-flag-off
 
       - name: Defender after
+        continue-on-error: true
         shell: pwsh
         run: |
           $ErrorActionPreference = "Continue"
@@ -104,8 +130,11 @@ jobs:
           @{ detections = $detections; realtime = $rt; available = $available } | ConvertTo-Json | Out-File -FilePath defender-after.json -Encoding utf8
           Get-Content defender-after.json
 
+      # THE GATE (council condition 3): NO continue-on-error here.
+      # A failed merge (exit 1) fails this job and the run, so a
+      # check failure drops the run. Publish/upload below still run
+      # (if: always) so the failed evidence is never lost.
       - name: Merge window spike results
-        continue-on-error: true
         run: .\crates\bimo-wintrack\target\x86_64-pc-windows-msvc\release\eye-window-spike.exe --merge
 
       - name: Publish window spike results to spike-results branch
