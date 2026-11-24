@@ -14,7 +14,7 @@
 
 pub mod wintrack;
 
-pub use wintrack::{tracker_supported, verify_proc_link, WinTrack};
+pub use wintrack::{exe_family_pids, tracker_supported, verify_proc_link, WinTrack};
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};

@@ -226,6 +226,40 @@ mod win {
         let _ = shared;
     }
 
+    /// Full process list: (pid, exe basename, parent pid). Used by
+    /// `exe_family_pids` — the parent link is what ties a launcher
+    /// stub (`calc.exe`) to the real app it spawned (`win32calc.exe`).
+    pub fn list_processes_full() -> Vec<(u32, String, u32)> {
+        let mut out = Vec::new();
+        unsafe {
+            let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+                return out;
+            };
+            let mut entry = PROCESSENTRY32W::default();
+            entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+            if Process32FirstW(snapshot, &mut entry).is_ok() {
+                loop {
+                    let end = entry
+                        .szExeFile
+                        .iter()
+                        .position(|&c| c == 0)
+                        .unwrap_or(entry.szExeFile.len());
+                    let exe = String::from_utf16_lossy(&entry.szExeFile[..end]);
+                    out.push((
+                        entry.th32ProcessID,
+                        exe,
+                        entry.th32ParentProcessID,
+                    ));
+                    if Process32NextW(snapshot, &mut entry).is_err() {
+                        break;
+                    }
+                }
+            }
+            let _ = windows::Win32::Foundation::CloseHandle(snapshot);
+        }
+        out
+    }
+
     /// Look up an exe basename for a pid. Retries once after 100 ms:
     /// a window event can arrive in the same instant its process is
     /// still registering, and a single failed lookup must not turn a
@@ -409,6 +443,36 @@ pub fn verify_proc_link(pid: u32, exe: &str) -> bool {
     }
 }
 
+/// The "family" of a launched app (Check 1): the launched pid itself,
+/// every pid currently named `exe`, and every pid whose parent is the
+/// launched pid.
+///
+/// Why: a launched exe is not always the window-owning exe.
+/// `calc.exe` on Windows is a launcher stub: it spawns the real
+/// calculator as `win32calc.exe`, and the foreground event belongs to
+/// the child. Counting focus events by the launched name alone would
+/// call the hook blind when it is not (proven on the runner,
+/// 2026-11-24: `calc.exe` 0 focus, `win32calc.exe` 1 focus, same
+/// window). The parent-pid link survives even if the stub already
+/// exited, because `th32ParentProcessID` is recorded at creation.
+pub fn exe_family_pids(exe: &str, launched_pid: u32) -> HashSet<u32> {
+    let mut out = HashSet::new();
+    out.insert(launched_pid);
+    #[cfg(windows)]
+    {
+        for (pid, found_exe, ppid) in win::list_processes_full() {
+            if found_exe.eq_ignore_ascii_case(exe) || ppid == launched_pid {
+                out.insert(pid);
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = exe;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -418,5 +482,15 @@ mod tests {
         // On this Linux dev machine the tracker must say so plainly
         // instead of pretending to work.
         assert_eq!(tracker_supported(), cfg!(windows));
+    }
+
+    #[test]
+    fn family_contains_launched_pid() {
+        // The launched pid is always in its own family, on every
+        // platform (off Windows the family is just that pid).
+        let fam = exe_family_pids("calc.exe", 4242);
+        assert!(fam.contains(&4242));
+        #[cfg(not(windows))]
+        assert_eq!(fam.len(), 1);
     }
 }
