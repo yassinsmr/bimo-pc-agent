@@ -32,7 +32,11 @@
 //!   "skipped" so local plumbing runs stay distinguishable from a
 //!   real Windows pass/fail.
 
-use bimo_wintrack::{tracker_supported, verify_proc_link, TrialLog, WinEvent, WinEventKind, WinTrack};
+use bimo_wintrack::{
+    exe_family_pids, tracker_supported, verify_proc_link, TrialLog, WinEvent, WinEventKind,
+    WinTrack,
+};
+use std::collections::HashSet;
 use std::fs;
 use std::sync::mpsc::{channel, Receiver};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -162,14 +166,27 @@ fn spawn_app(exe: &str) -> Result<std::process::Child, String> {
         .map_err(|e| format!("spawn {}: {}", exe, e))
 }
 
-fn count_kind(events: &[WinEvent], exe: &str, kind: &WinEventKind) -> usize {
+fn count_kind_family(events: &[WinEvent], family: &HashSet<u32>, kind: &WinEventKind) -> usize {
     events
         .iter()
         .filter(|e| {
             std::mem::discriminant(&e.kind) == std::mem::discriminant(kind)
-                && e.exe.eq_ignore_ascii_case(exe)
+                && family.contains(&e.pid)
         })
         .count()
+}
+
+/// Distinct exe names seen for a family, for the fragment (evidence
+/// that a launcher stub handed its windows to a child process).
+fn family_exes(events: &[WinEvent], family: &HashSet<u32>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for e in events {
+        if family.contains(&e.pid) && !out.contains(&e.exe) {
+            out.push(e.exe.clone());
+        }
+    }
+    out.sort();
+    out
 }
 
 // ---------------------------------------------------------------- Check 1
@@ -186,21 +203,26 @@ fn check_hook_fires() -> i32 {
         Ok(l) => l,
         Err(e) => return fail(name, &format!("trial log open failed: {}", e)),
     };
-    let mut launched: Vec<(&str, bool)> = Vec::new();
+    // Events are counted per process FAMILY, not per launched name:
+    // a launcher stub hands its windows to a child process
+    // (calc.exe -> win32calc.exe on Windows; the child's foreground
+    // event belongs to the child, not the stub). The family snapshot
+    // is taken while the apps are still alive, before the kill.
+    let mut launched: Vec<(&str, bool, Option<u32>)> = Vec::new();
     let mut children = Vec::new();
     for app in ["notepad.exe", "calc.exe"] {
         match spawn_app(app) {
             Ok(child) => {
-                launched.push((app, true));
+                launched.push((app, true, Some(child.id())));
                 children.push(child);
             }
             Err(e) => {
                 eprintln!("[winspike] launch failed (waived with reason): {}", e);
-                launched.push((app, false));
+                launched.push((app, false, None));
             }
         }
     }
-    if launched.iter().all(|(_, ok)| !ok) {
+    if launched.iter().all(|(_, ok, _)| !ok) {
         track.stop();
         return fail(
             name,
@@ -209,6 +231,16 @@ fn check_hook_fires() -> i32 {
     }
     let deadline = Instant::now() + Duration::from_secs(8);
     let events = drain_until(&rx, &mut log, deadline);
+    let families: Vec<HashSet<u32>> = launched
+        .iter()
+        .map(|(app, ok, pid)| {
+            if *ok {
+                exe_family_pids(app, pid.unwrap_or(0))
+            } else {
+                HashSet::new()
+            }
+        })
+        .collect();
     for mut child in children {
         let _ = child.kill();
         let _ = child.wait();
@@ -222,24 +254,26 @@ fn check_hook_fires() -> i32 {
     let mut details = String::from("{");
     let mut first = true;
     let mut pass = true;
-    for (app, ok) in &launched {
+    for (i, (app, ok, _)) in launched.iter().enumerate() {
         if !first {
             details.push(',');
         }
         first = false;
-        let focus = count_kind(&all, app, &WinEventKind::AppFocus);
-        let open = count_kind(&all, app, &WinEventKind::AppOpen);
-        let close = count_kind(&all, app, &WinEventKind::AppClose);
+        let family = &families[i];
+        let focus = count_kind_family(&all, family, &WinEventKind::AppFocus);
+        let open = count_kind_family(&all, family, &WinEventKind::AppOpen);
+        let close = count_kind_family(&all, family, &WinEventKind::AppClose);
+        let exes = family_exes(&all, family);
         details.push_str(&format!(
-            "\"{}\":{{\"launched\":{},\"app.focus\":{},\"app.open\":{},\"app.close\":{}}}",
-            app, ok, focus, open, close
+            "\"{}\":{{\"launched\":{},\"family_exes\":{:?},\"app.focus\":{},\"app.open\":{},\"app.close\":{}}}",
+            app, ok, exes, focus, open, close
         ));
         if *ok && focus == 0 {
             pass = false;
         }
     }
     details.push_str(&format!(
-        ",\"total_events\":{},\"note\":\"SetWinEventHook (out-of-context) on Notepad+calc; an app that failed to launch is waived with its reason, never counted as a hook failure\"",
+        ",\"total_events\":{},\"note\":\"SetWinEventHook (out-of-context) on Notepad+calc; counts are per process family (launched exe + its children) because a launcher stub hands its windows to a child (calc.exe -> win32calc.exe); an app that failed to launch is waived with its reason, never counted as a hook failure\"",
         all.len()
     ));
     details.push('}');
