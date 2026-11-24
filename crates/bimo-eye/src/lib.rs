@@ -38,6 +38,12 @@ pub enum EyeEvent {
     /// Inference only — always `confidence: "low"`, never a trigger for
     /// any alert or quarantine on its own (council condition 4).
     InstallDetected { path: PathBuf },
+    /// Log honesty (eye-core council condition 4): the eye records its
+    /// own gaps. When the bounded event queue overflows and routine
+    /// events are dropped, the writer writes one `log.gap` event
+    /// naming how many were dropped and from where — a gap is data,
+    /// never silence.
+    LogGap { dropped: u64, reason: String },
 }
 
 impl EyeEvent {
@@ -56,6 +62,7 @@ impl EyeEvent {
             EyeEvent::ProcSeen { .. } => "proc.seen",
             EyeEvent::ProcGone { .. } => "proc.gone",
             EyeEvent::InstallDetected { .. } => "install.detected",
+            EyeEvent::LogGap { .. } => "log.gap",
         }
     }
 
@@ -116,6 +123,11 @@ impl EyeEvent {
                 "type": "install.detected",
                 "path": path.display().to_string(),
                 "confidence": "low",
+            }),
+            EyeEvent::LogGap { dropped, reason } => json!({
+                "type": "log.gap",
+                "dropped": dropped,
+                "reason": reason,
             }),
         }
     }

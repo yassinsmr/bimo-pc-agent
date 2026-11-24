@@ -47,12 +47,16 @@ impl LogWriter {
     /// its tail. If the chain is broken, the old file is archived as
     /// `.broken-<unix>.jsonl` and a fresh log starts — the break is
     /// recorded as a warning event in the new file, never hidden.
+    ///
+    /// Fail-closed (eye-core council condition 2): if DPAPI is
+    /// unavailable and there is no explicit plaintext opt-in, opening
+    /// refuses with a clear error — no log is written in plaintext.
     pub fn open(data_dir: &Path) -> Result<(LogWriter, Option<String>), String> {
         std::fs::create_dir_all(data_dir)
             .map_err(|e| format!("cannot create data dir {}: {e}", data_dir.display()))?;
         prune_old_logs(data_dir);
         let path = data_dir.join("eye-events.jsonl");
-        let crypto = crate::crypto::detect_mode();
+        let crypto = crate::crypto::detect_mode()?;
 
         let mut seq = 0u64;
         let mut prev_hash = GENESIS.to_string();
@@ -133,7 +137,9 @@ impl LogWriter {
         obj["hash"] = Value::from(hash.clone());
         let line = serde_json::to_string(&obj)
             .map_err(|e| format!("cannot serialise event: {e}"))?;
-        let disk = protect_line(&line, self.crypto);
+        // Fail-closed (council condition 2): a protection failure is an
+        // error, never a silent plaintext write.
+        let disk = protect_line(&line, self.crypto)?;
         let file = self
             .file
             .as_mut()
