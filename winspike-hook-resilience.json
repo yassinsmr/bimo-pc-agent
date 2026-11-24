@@ -1,1 +1,1 @@
-{"check":"hook-resilience","status":"pass","ts_unix":1795553620,"details":{"baseline_events":9,"recovered_after_ms":5032,"post_recovery_events":18,"note":"kill was outright (UnhookWinEvent); watchdog tick is 5 s, budget is 10 s"}}
+{"check":"hook-resilience","status":"pass","ts_unix":1795554037,"details":{"baseline_events":9,"recovered_after_ms":5019,"post_recovery_events":18,"note":"kill was outright (UnhookWinEvent); watchdog tick is 5 s, budget is 10 s"}}
