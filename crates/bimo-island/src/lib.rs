@@ -126,7 +126,7 @@ mod windows_impl {
     use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_UNKNOWN};
     use windows::Win32::Graphics::Gdi::UpdateWindow;
     use windows::Win32::Graphics::Imaging::*;
-    use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
+    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS_EX};
     use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
@@ -383,6 +383,11 @@ mod windows_impl {
     /// but does not fail the performance gate.
     fn save_snapshot(path: &str, geo: IslandGeometry) -> Result<(), String> {
         unsafe {
+            // WIC is COM: the thread must be initialized before any
+            // CoCreateInstance call (missing this was the 2026-11-23
+            // gate-run failure: 0x800401F0 CO_E_NOTINITIALIZED).
+            // S_FALSE (already initialized) is fine — ignore the result.
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
             let wic: IWICImagingFactory = CoCreateInstance(
                 &CLSID_WICImagingFactory,
                 None,
