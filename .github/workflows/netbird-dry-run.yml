@@ -21,20 +21,29 @@
 #   install duration. Join is NOT attempted — that needs a setup key
 #   from a NetBird account, which only Yassin creates.
 #
-# Run 2 (2026-11-24 05:47, run 45335821413): dry-run checks ALL PASSED —
-# winget install 11.55s, version 0.83.2, service Running before/after 10s,
-# `netbird status` exit 0 with "Daemon status: NeedsLogin" (daemon reachable,
-# not logged in — exactly the expected dry-run state, no join, no credentials).
-# JSON verified independently from the artifact (sha256 87f6e752...). The run
-# still shows Failure ONLY because the publish step had no git checkout
-# ("fatal: not in a git directory") and a redundant Copy-Item. Fixed in v3:
-# actions/checkout@v4 first step + `git add -f` directly (gate-workflow
-# pattern). Run 3 re-runs to land the JSON on the gate-results branch.
+# Run 3 (2026-11-24 05:54, run 45336558498): dry-run checks PASSED a third
+# time (0.83.2, service Running/Running, install 10.98s, status exit 0,
+# NeedsLogin, no join) — JSON verified independently from the artifact
+# (sha256 db2727e9...). Publish step: checkout+commit worked locally
+# ([gate-results 922ff59]) but `git push` failed 403: "Permission to
+# yassinsmr/bimo-pc-agent.git denied to github-actions[bot]" — the default
+# GITHUB_TOKEN is read-only. Root cause found by reading the deployed
+# windows-proof-gate workflow: it declares `permissions: contents: write`.
+# Fixed in v4 (same declaration, no repo-settings change). Run 3 also queued
+# ~8 min before starting (runner queue delay, noted).
+# Run 4 re-runs to land the JSON on the gate-results branch.
 
 name: netbird-dry-run
 
 on:
   workflow_dispatch:
+
+# NOTE (run 3 lesson): the deployed windows-proof-gate workflow declares
+# `permissions: contents: write` — without it the default GITHUB_TOKEN is
+# read-only and `git push` fails with 403 ("Permission denied to
+# github-actions[bot]"). Added here in v4; no repo-settings change needed.
+permissions:
+  contents: write
 
 jobs:
   dry-run:
