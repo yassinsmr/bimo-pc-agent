@@ -32,7 +32,7 @@
       "status": "pass"
     },
     {
-      "detail": "164 lines verified",
+      "detail": "160 lines verified",
       "name": "hash chain valid",
       "status": "pass"
     },
@@ -52,13 +52,18 @@
       "status": "pass"
     },
     {
+      "detail": "the snapshotter must report at least one process; a dead snapshotter must not hide behind a missed Notepad",
+      "name": "snapshotter alive (any proc.seen)",
+      "status": "pass"
+    },
+    {
       "detail": "snapshotter must see Notepad while it runs",
       "name": "proc.seen notepad.exe",
-      "status": "fail"
+      "status": "pass"
     }
   ],
   "crypto": "dpapi",
-  "events_total": 164,
+  "events_total": 160,
   "honest_limits": [
     "runner numbers do not prove device performance (flawhunt 11-z)",
     "no real fullscreen game on the runner; game capture is decided on the Legion (second gate)",
@@ -66,9 +71,9 @@
   ],
   "notes": [],
   "resources": {
-    "cpu_seconds": 0.0625,
-    "elapsed_seconds": 28.0568583,
-    "rss_kb": 7236
+    "cpu_seconds": 0.078125,
+    "elapsed_seconds": 28.0444309,
+    "rss_kb": 7128
   },
-  "verdict": "fail"
+  "verdict": "pass"
 }
