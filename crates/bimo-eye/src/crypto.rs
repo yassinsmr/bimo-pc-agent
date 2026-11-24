@@ -1,13 +1,24 @@
-//! Local encryption of the event log (council condition 8).
+//! Local encryption of the event log (council condition 8 +
+//! eye-core council condition 2: DPAPI fails CLOSED).
 //!
 //! Windows: every log line is protected with DPAPI (`CryptProtectData`,
 //! current-user scope) — no password, no key stored in the code. The
 //! disk line is `{"enc":"dpapi","data":"<hex ciphertext>"}`.
 //!
-//! Fallback (spec section 6): if DPAPI is unavailable — e.g. no real
-//! user profile on the runner — the core records a warning in the log
-//! itself and continues in plaintext. Encryption then stays an
-//! "arrival-day" item, not a silent gap.
+//! Fail-closed (council condition 2, cycle 15): there is NO silent
+//! fallback to plaintext anymore. If DPAPI is unavailable the eye
+//! refuses to start writing sensitive lines, unless the operator
+//! explicitly opts into plaintext with the environment variable
+//! `BIMO_EYE_PLAINTEXT_OK=1` — and that opt-in is itself recorded as
+//! a warning event in the log, so plaintext is never silent either.
+//! A mid-run DPAPI failure makes `protect_line` return an error and
+//! the writer stops (the log is the product; a half-written log that
+//! silently went plain is worse than a stopped eye).
+//!
+//! Test seam: `BIMO_EYE_FORCE_CRYPTO_FAIL=1` simulates a DPAPI
+//! failure on any platform (the same branches a real failure takes).
+//! It exists so the self-test can prove the fail-closed path without
+//! breaking a real Windows profile. Never set it in production.
 
 use serde_json::Value;
 
@@ -27,27 +38,84 @@ impl CryptoMode {
     }
 }
 
-/// The mode this machine will use. On Windows we probe DPAPI once with a
-/// tiny test blob; anywhere else (or on failure) we fall back to plain.
-pub fn detect_mode() -> CryptoMode {
+/// Explicit plaintext opt-in, read from the environment.
+/// Plaintext is only ever used when the operator asked for it.
+pub fn plaintext_opt_in() -> bool {
+    std::env::var("BIMO_EYE_PLAINTEXT_OK").map(|v| v == "1").unwrap_or(false)
+}
+
+/// Test seam: force every crypto operation to fail, as if DPAPI were
+/// unavailable. Used by the self-test to prove the fail-closed path.
+fn crypto_force_fail() -> bool {
+    std::env::var("BIMO_EYE_FORCE_CRYPTO_FAIL")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+}
+
+/// The mode this machine will use — or an error refusing to write.
+///
+/// Windows: probe DPAPI once with a tiny test blob. Anywhere else
+/// (Linux/macOS dev builds) DPAPI does not exist, so the probe always
+/// fails and the same branches apply. On failure the result is
+/// `Plain` ONLY with an explicit opt-in, otherwise `Err` with a clear
+/// message naming the refusal.
+pub fn detect_mode() -> Result<CryptoMode, String> {
+    if crypto_force_fail() {
+        return if plaintext_opt_in() {
+            Ok(CryptoMode::Plain)
+        } else {
+            Err("DPAPI unavailable (simulated failure): refusing to write \
+                 sensitive log lines in plaintext; set BIMO_EYE_PLAINTEXT_OK=1 \
+                 to opt in explicitly"
+                .to_string())
+        };
+    }
     #[cfg(windows)]
     {
         match dpapi_protect(b"bimo-eye-probe") {
-            Some(_) => CryptoMode::Dpapi,
-            None => CryptoMode::Plain,
+            Some(_) => Ok(CryptoMode::Dpapi),
+            None => {
+                if plaintext_opt_in() {
+                    Ok(CryptoMode::Plain)
+                } else {
+                    Err("DPAPI unavailable on this machine: refusing to write \
+                         sensitive log lines in plaintext; set \
+                         BIMO_EYE_PLAINTEXT_OK=1 to opt in explicitly"
+                        .to_string())
+                }
+            }
         }
     }
     #[cfg(not(windows))]
     {
-        CryptoMode::Plain
+        // No DPAPI off Windows: same rule — plaintext only by opt-in.
+        if plaintext_opt_in() {
+            Ok(CryptoMode::Plain)
+        } else {
+            Err("DPAPI does not exist on this platform: refusing to write \
+                 sensitive log lines in plaintext; set BIMO_EYE_PLAINTEXT_OK=1 \
+                 to opt in explicitly"
+                .to_string())
+        }
     }
 }
 
-/// Protect one log line for disk. Returns the exact line to write.
-pub fn protect_line(line: &str, mode: CryptoMode) -> String {
+/// Protect one log line for disk. Returns the exact line to write, or
+/// an error — a failed protection is NEVER silently replaced by the
+/// plaintext line (council condition 2).
+pub fn protect_line(line: &str, mode: CryptoMode) -> Result<String, String> {
     match mode {
-        CryptoMode::Plain => line.to_string(),
+        CryptoMode::Plain => Ok(line.to_string()),
         CryptoMode::Dpapi => {
+            // The seam simulates a DPAPI failure — it only affects the
+            // DPAPI path, never plaintext (there is no DPAPI to fail
+            // there).
+            if crypto_force_fail() {
+                return Err(
+                    "crypto failure (simulated): refusing to write the line in plaintext"
+                        .to_string(),
+                );
+            }
             #[cfg(windows)]
             {
                 match dpapi_protect(line.as_bytes()) {
@@ -56,16 +124,19 @@ pub fn protect_line(line: &str, mode: CryptoMode) -> String {
                             "enc": "dpapi",
                             "data": hex_encode(&ct),
                         });
-                        serde_json::to_string(&v).unwrap_or_else(|_| line.to_string())
+                        serde_json::to_string(&v)
+                            .map_err(|e| format!("cannot serialise protected line: {e}"))
                     }
-                    // DPAPI failed mid-run: write plaintext rather than
-                    // losing the event, and let the reader see it is plain.
-                    None => line.to_string(),
+                    // DPAPI failed mid-run: fail closed, do not write plain.
+                    None => Err(
+                        "CryptProtectData failed mid-run: refusing to write the line in plaintext"
+                            .to_string(),
+                    ),
                 }
             }
             #[cfg(not(windows))]
             {
-                line.to_string()
+                Err("dpapi mode selected on a non-Windows build".to_string())
             }
         }
     }
@@ -199,5 +270,39 @@ fn dpapi_unprotect(data: &[u8]) -> Result<Vec<u8>, String> {
             blob_out.pbData as *mut core::ffi::c_void,
         )));
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn clear_seam_env() {
+        std::env::remove_var("BIMO_EYE_FORCE_CRYPTO_FAIL");
+        std::env::remove_var("BIMO_EYE_PLAINTEXT_OK");
+    }
+
+    #[test]
+    fn fail_closed_without_opt_in() {
+        clear_seam_env();
+        std::env::set_var("BIMO_EYE_FORCE_CRYPTO_FAIL", "1");
+        // Simulated DPAPI failure, no opt-in: detection must refuse.
+        assert!(detect_mode().is_err());
+        // And a single line must refuse too, never fall back to plain.
+        assert!(protect_line("{\"type\":\"x\"}", CryptoMode::Dpapi).is_err());
+        clear_seam_env();
+    }
+
+    #[test]
+    fn opt_in_allows_plain_explicitly() {
+        clear_seam_env();
+        std::env::set_var("BIMO_EYE_FORCE_CRYPTO_FAIL", "1");
+        std::env::set_var("BIMO_EYE_PLAINTEXT_OK", "1");
+        assert_eq!(detect_mode().unwrap(), CryptoMode::Plain);
+        assert_eq!(
+            protect_line("{\"type\":\"x\"}", CryptoMode::Plain).unwrap(),
+            "{\"type\":\"x\"}"
+        );
+        clear_seam_env();
     }
 }

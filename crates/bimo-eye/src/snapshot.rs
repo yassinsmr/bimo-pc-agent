@@ -5,7 +5,7 @@
 //! reports itself as unsupported.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -18,12 +18,16 @@ pub fn snapshot_supported() -> bool {
     cfg!(windows)
 }
 
-/// Start the snapshotter thread.
+/// Start the snapshotter thread. `dropped` counts routine `proc.*`
+/// events lost when the bounded queue is full (log honesty, council
+/// condition 4): the writer turns the count into a `log.gap` event
+/// instead of staying silent about the loss.
 pub fn start_snapshotter(
     tx: SyncSender<EyeEvent>,
     interval: Duration,
     paused: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
+    dropped: Arc<AtomicU64>,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let mut previous: HashMap<u32, String> = HashMap::new();
@@ -43,18 +47,28 @@ pub fn start_snapshotter(
                 } else {
                     for (pid, exe) in &current {
                         if !previous.contains_key(pid) {
-                            let _ = tx.try_send(EyeEvent::ProcSeen {
-                                pid: *pid,
-                                exe: exe.clone(),
-                            });
+                            if tx
+                                .try_send(EyeEvent::ProcSeen {
+                                    pid: *pid,
+                                    exe: exe.clone(),
+                                })
+                                .is_err()
+                            {
+                                dropped.fetch_add(1, Ordering::Relaxed);
+                            }
                         }
                     }
                     for (pid, exe) in &previous {
                         if !current.contains_key(pid) {
-                            let _ = tx.try_send(EyeEvent::ProcGone {
-                                pid: *pid,
-                                exe: exe.clone(),
-                            });
+                            if tx
+                                .try_send(EyeEvent::ProcGone {
+                                    pid: *pid,
+                                    exe: exe.clone(),
+                                })
+                                .is_err()
+                            {
+                                dropped.fetch_add(1, Ordering::Relaxed);
+                            }
                         }
                     }
                 }

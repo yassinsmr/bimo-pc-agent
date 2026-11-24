@@ -13,7 +13,7 @@
 //! (`try_send`); critical file events block instead of being lost.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -93,7 +93,10 @@ pub fn start(cfg: EyeConfig) -> Result<EyeHandle, String> {
     let crypto_mode = writer.crypto();
 
     let scope_note = format!(
-        "eye v1 watches ONLY: {}. NOT covered: everything outside these folders (condition 7).",
+        "eye v1 watches ONLY: {}. NOT covered: everything outside these folders (condition 7). \
+         Threat model (honest, eye-core council condition 3): the hash chain is tamper-EVIDENCE, \
+         not integrity against an attacker with the same privileges; DPAPI protects against \
+         another user / a stolen disk, not against malware running as Yassin.",
         cfg.watch_dirs
             .iter()
             .map(|d| d.display().to_string())
@@ -107,10 +110,11 @@ pub fn start(cfg: EyeConfig) -> Result<EyeHandle, String> {
     if let Some(note) = resume_note {
         writer.write(&EyeEvent::Warning { message: note })?;
     }
-    #[cfg(windows)]
+    // Plaintext is only ever used by explicit opt-in (council
+    // condition 2) — the opt-in itself is recorded in the log.
     if crypto_mode == crate::crypto::CryptoMode::Plain {
         writer.write(&EyeEvent::Warning {
-            message: "DPAPI unavailable: log is written in plaintext; encryption stays an arrival-day item".to_string(),
+            message: "plaintext log: explicit opt-in BIMO_EYE_PLAINTEXT_OK=1 recorded; encryption stays an arrival-day item".to_string(),
         })?;
     }
 
@@ -121,9 +125,16 @@ pub fn start(cfg: EyeConfig) -> Result<EyeHandle, String> {
     let stop_flag = Arc::new(AtomicBool::new(false));
     let game_mode = Arc::new(AtomicBool::new(cfg.game_mode));
 
+    // Log honesty (council condition 4): producers count what they
+    // drop; the writer turns the counts into `log.gap` events.
+    let dropped_events = Arc::new(AtomicU64::new(0));
+    let dropped_hashes = Arc::new(AtomicU64::new(0));
+
     // Writer thread: owns the log, forwards hash work, infers installs.
+    let writer_dropped_events = dropped_events.clone();
+    let writer_dropped_hashes = dropped_hashes.clone();
     let writer_handle = std::thread::spawn(move || {
-        writer_loop(writer, rx, hash_tx);
+        writer_loop(writer, rx, hash_tx, writer_dropped_events, writer_dropped_hashes);
     });
 
     let watcher_handle = watch::start_watcher(
@@ -138,6 +149,7 @@ pub fn start(cfg: EyeConfig) -> Result<EyeHandle, String> {
         Duration::from_secs(cfg.snapshot_secs),
         paused.clone(),
         stop_flag.clone(),
+        dropped_events,
     );
     let hash_handle = start_hash_worker(
         hash_rx,
@@ -172,12 +184,45 @@ pub fn start(cfg: EyeConfig) -> Result<EyeHandle, String> {
     })
 }
 
+/// Take-and-reset a drop counter as a `log.gap` event, if anything
+/// was dropped since the last check. Pure enough to unit-test: a gap
+/// is data, never silence (council condition 4).
+pub fn take_gap_event(counter: &AtomicU64, reason: &str) -> Option<EyeEvent> {
+    let dropped = counter.swap(0, Ordering::Relaxed);
+    if dropped == 0 {
+        None
+    } else {
+        Some(EyeEvent::LogGap {
+            dropped,
+            reason: reason.to_string(),
+        })
+    }
+}
+
 fn writer_loop(
     mut writer: LogWriter,
     rx: Receiver<EyeEvent>,
     hash_tx: SyncSender<PathBuf>,
+    dropped_events: Arc<AtomicU64>,
+    dropped_hashes: Arc<AtomicU64>,
 ) {
     while let Ok(ev) = rx.recv() {
+        // Record our own gaps BEFORE the event that follows them.
+        if let Some(gap) =
+            take_gap_event(&dropped_events, "event queue full: routine proc.* events dropped")
+        {
+            if writer.write(&gap).is_err() {
+                break;
+            }
+        }
+        if let Some(gap) = take_gap_event(
+            &dropped_hashes,
+            "hash queue full: hash requests dropped (files will be re-hashed on next completion)",
+        ) {
+            if writer.write(&gap).is_err() {
+                break;
+            }
+        }
         let mut extra: Option<EyeEvent> = None;
         if let EyeEvent::FileCompleted { path, .. } = &ev {
             if is_installer(path) {
@@ -185,8 +230,8 @@ fn writer_loop(
                     path: path.clone(),
                 });
             }
-            if is_hashable(path) {
-                let _ = hash_tx.try_send(path.clone());
+            if is_hashable(path) && hash_tx.try_send(path.clone()).is_err() {
+                dropped_hashes.fetch_add(1, Ordering::Relaxed);
             }
         }
         if writer.write(&ev).is_err() {
@@ -200,8 +245,42 @@ fn writer_loop(
             }
         }
     }
+    // Flush any gaps recorded after the last received event.
+    if let Some(gap) =
+        take_gap_event(&dropped_events, "event queue full: routine proc.* events dropped")
+    {
+        let _ = writer.write(&gap);
+    }
+    if let Some(gap) = take_gap_event(
+        &dropped_hashes,
+        "hash queue full: hash requests dropped (files will be re-hashed on next completion)",
+    ) {
+        let _ = writer.write(&gap);
+    }
     let _ = writer.write(&EyeEvent::AgentStop {
         reason: "eye.stop".to_string(),
     });
     writer.close();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gap_event_emitted_and_counter_reset() {
+        let c = AtomicU64::new(0);
+        assert!(take_gap_event(&c, "x").is_none());
+        c.fetch_add(7, Ordering::Relaxed);
+        let ev = take_gap_event(&c, "queue full").expect("gap event");
+        match ev {
+            EyeEvent::LogGap { dropped, reason } => {
+                assert_eq!(dropped, 7);
+                assert_eq!(reason, "queue full");
+            }
+            _ => panic!("wrong event"),
+        }
+        assert_eq!(c.load(Ordering::Relaxed), 0);
+        assert!(take_gap_event(&c, "x").is_none());
+    }
 }
