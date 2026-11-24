@@ -1,0 +1,130 @@
+# Eye spike workflow — Track A Unit 2 (the Eye), council condition 2.
+# Purpose: prove on REAL Windows, before building the eye unit:
+#   1. Graphics Capture from the primary monitor WITHOUT a picker
+#      (Monitor::primary() -> Settings::new, no GraphicsCapturePicker).
+#   2. DXGI Desktop Duplication fallback, one frame.
+#   3. Capture while a borderless fullscreen window is shown
+#      (approximation of a fullscreen game — no real game on the runner;
+#      the real-game capture is decided on the Legion, second gate).
+#   4. SetWinEventHook installs and fires (Notepad open/close) while
+#      Windows Defender records no NEW threat detection.
+# Failure of any check = spike fails = the eye unit build stops
+# (council condition 2). A headless-runner failure is recorded as
+# such in the JSON, not silently treated as a design failure.
+#
+# Lessons reused (cycles 2-7): permissions: contents: write (else the
+# push fails 403), actions/checkout present in the publish step,
+# if: always() on publish, each check continue-on-error so one failure
+# cannot hide the others.
+
+name: eye-spike
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  spike:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable + MSVC target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build eye-spike for Windows
+        run: cargo build --release --target x86_64-pc-windows-msvc -p eye-spike --locked
+
+      - name: Defender baseline (before)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $detections = 0
+          $available = $true
+          try {
+            $t = Get-MpThreatDetection -ErrorAction Stop
+            if ($null -ne $t) { $detections = @($t).Count }
+          } catch { $available = $false }
+          $rt = $false
+          try { $rt = (Get-MpComputerStatus -ErrorAction Stop).RealTimeProtectionEnabled } catch { $available = $false }
+          @{ detections = $detections; realtime = $rt; available = $available } | ConvertTo-Json | Out-File -FilePath defender-before.json -Encoding utf8
+          Get-Content defender-before.json
+
+      - name: Check 1 — Graphics Capture, no picker
+        continue-on-error: true
+        timeout-minutes: 3
+        run: .\target\x86_64-pc-windows-msvc\release\eye-spike.exe --check gcap
+
+      - name: Check 2 — DXGI Desktop Duplication
+        continue-on-error: true
+        timeout-minutes: 3
+        run: .\target\x86_64-pc-windows-msvc\release\eye-spike.exe --check dxgi
+
+      - name: Check 3 — capture over fullscreen window
+        continue-on-error: true
+        timeout-minutes: 3
+        run: .\target\x86_64-pc-windows-msvc\release\eye-spike.exe --check fullscreen
+
+      - name: Check 4 — WinEvent hook + Notepad
+        continue-on-error: true
+        timeout-minutes: 3
+        run: .\target\x86_64-pc-windows-msvc\release\eye-spike.exe --check hook
+
+      - name: Defender after
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $detections = 0
+          $available = $true
+          try {
+            $t = Get-MpThreatDetection -ErrorAction Stop
+            if ($null -ne $t) { $detections = @($t).Count }
+          } catch { $available = $false }
+          $rt = $false
+          try { $rt = (Get-MpComputerStatus -ErrorAction Stop).RealTimeProtectionEnabled } catch { $available = $false }
+          @{ detections = $detections; realtime = $rt; available = $available } | ConvertTo-Json | Out-File -FilePath defender-after.json -Encoding utf8
+          Get-Content defender-after.json
+
+      - name: Merge spike results
+        continue-on-error: true
+        run: .\target\x86_64-pc-windows-msvc\release\eye-spike.exe --merge
+
+      - name: Publish spike results to gate-results branch
+        if: always()
+        shell: bash
+        run: |
+          git config user.name "bimo-gate"
+          git config user.email "bimo-gate@local"
+          git checkout -B gate-results
+          git add -f spike-results.json spike-gcap.json spike-dxgi.json spike-fullscreen.json spike-hook.json defender-before.json defender-after.json || true
+          git add -f spike-gcap.png spike-dxgi.png spike-fullscreen.png || true
+          if git diff --cached --quiet; then
+            echo "no spike results to commit"
+          else
+            git commit -m "eye spike results $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            git push -f origin gate-results
+          fi
+
+      - name: Upload spike results + binary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eye-spike
+          path: |
+            spike-results.json
+            spike-gcap.json
+            spike-dxgi.json
+            spike-fullscreen.json
+            spike-hook.json
+            defender-before.json
+            defender-after.json
+            spike-gcap.png
+            spike-dxgi.png
+            spike-fullscreen.png
+            target/x86_64-pc-windows-msvc/release/eye-spike.exe
+          retention-days: 30
