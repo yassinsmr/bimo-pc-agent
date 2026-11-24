@@ -17,9 +17,19 @@
       "status": "pass"
     },
     {
+      "detail": "without opt-in, detection refuses and protect_line errors; with opt-in, plaintext is explicit",
+      "name": "crypto fails closed (simulated DPAPI failure)",
+      "status": "fail"
+    },
+    {
       "detail": "background hash worker must hash the installer",
       "name": "file.hash setup.exe",
       "status": "pass"
+    },
+    {
+      "detail": "1 file.hash events for setup.exe; first hash must differ from last",
+      "name": "file re-hashed after later change",
+      "status": "fail"
     },
     {
       "detail": "debounced completion of a plain file",
@@ -32,7 +42,7 @@
       "status": "pass"
     },
     {
-      "detail": "158 lines verified",
+      "detail": "187 lines verified",
       "name": "hash chain valid",
       "status": "pass"
     },
@@ -52,6 +62,21 @@
       "status": "pass"
     },
     {
+      "detail": "heartbeat.json must exist while the eye runs",
+      "name": "heartbeat file present before stop",
+      "status": "pass"
+    },
+    {
+      "detail": "while stopped: heartbeat.json gone and eye.stopped present",
+      "name": "stop leaves an outside-the-log trace",
+      "status": "pass"
+    },
+    {
+      "detail": "heartbeat.json must return with a newer timestamp after the stop file is removed",
+      "name": "heartbeat file fresh again after resume",
+      "status": "pass"
+    },
+    {
       "detail": "the snapshotter must report at least one process; a dead snapshotter must not hide behind a missed Notepad",
       "name": "snapshotter alive (any proc.seen)",
       "status": "pass"
@@ -63,7 +88,7 @@
     }
   ],
   "crypto": "dpapi",
-  "events_total": 158,
+  "events_total": 187,
   "honest_limits": [
     "runner numbers do not prove device performance (flawhunt 11-z)",
     "no real fullscreen game on the runner; game capture is decided on the Legion (second gate)",
@@ -71,9 +96,9 @@
   ],
   "notes": [],
   "resources": {
-    "cpu_seconds": 0.0625,
-    "elapsed_seconds": 28.0395614,
-    "rss_kb": 7168
+    "cpu_seconds": 0.046875,
+    "elapsed_seconds": 39.0894138,
+    "rss_kb": 7172
   },
-  "verdict": "pass"
+  "verdict": "fail"
 }
