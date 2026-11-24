@@ -1,0 +1,1 @@
+{"check":"dxgi","status":"pass","ts_unix":1795520080,"details":{"width":1024,"height":768,"elapsed_ms":58,"file":"spike-dxgi.png","bytes":271306,"note":"DXGI Desktop Duplication fallback, one frame"}}
