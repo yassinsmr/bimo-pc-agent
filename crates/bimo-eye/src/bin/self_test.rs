@@ -103,6 +103,11 @@ fn main() {
     // DPAPI failure on any platform; the same branches run for a real
     // failure. Plaintext in this throwaway test dir is an explicit
     // opt-in, restored before the eye starts.
+    //
+    // NOTE (cycle 15 fix): the opt-in assertion must be checked WHILE
+    // the failure is still simulated. On Windows with a working DPAPI,
+    // detect_mode() returns Dpapi once the seam is removed — asserting
+    // Plain after removing it is wrong and failed the Windows run.
     std::env::remove_var("BIMO_EYE_FORCE_CRYPTO_FAIL");
     std::env::set_var("BIMO_EYE_PLAINTEXT_OK", "1");
     let fail_closed_ok = {
@@ -111,9 +116,11 @@ fn main() {
         std::env::remove_var("BIMO_EYE_PLAINTEXT_OK");
         let refused = detect_mode().is_err()
             && protect_line("{\"type\":\"x\"}", CryptoMode::Dpapi).is_err();
-        std::env::remove_var("BIMO_EYE_FORCE_CRYPTO_FAIL");
+        // Failure STILL simulated, opt-in now set: detection must yield
+        // Plain explicitly — on every platform, including Windows.
         std::env::set_var("BIMO_EYE_PLAINTEXT_OK", "1");
         let opt_in_ok = detect_mode().map(|m| m == CryptoMode::Plain).unwrap_or(false);
+        std::env::remove_var("BIMO_EYE_FORCE_CRYPTO_FAIL");
         refused && opt_in_ok
     };
 
@@ -301,6 +308,24 @@ fn main() {
         "background hash worker must hash the installer".to_string(),
     );
     // Council condition 4: a later change must produce a NEW hash.
+    // Diagnostic (cycle 15): count completions too — if the second
+    // hash is missing, this tells us whether the watcher never
+    // reported the change (1 completion) or the worker lost it.
+    let setup_completions = events
+        .iter()
+        .filter(|e| {
+            e.get("type").and_then(|v| v.as_str()) == Some("file.completed")
+                && e.get("path")
+                    .and_then(|v| v.as_str())
+                    .map(|p| p.to_lowercase().contains("setup.exe"))
+                    .unwrap_or(false)
+        })
+        .count();
+    check(
+        "second completion observed for setup.exe",
+        setup_completions >= 2,
+        format!("{setup_completions} file.completed events for setup.exe; the change must be reported"),
+    );
     let setup_hashes: Vec<&str> = events
         .iter()
         .filter_map(|e| {
