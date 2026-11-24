@@ -29,6 +29,11 @@ pub enum WinEventKind {
     AppClose,
     AppFocus,
     HookRecovered,
+    /// Emitted into the trial log when the hook died and the
+    /// watchdog did NOT bring it back within the 10 s budget
+    /// (council condition 3: an explicit failure event, not a
+    /// silent fragment-only failure).
+    HookRecoveryFailed,
 }
 
 impl WinEventKind {
@@ -39,6 +44,7 @@ impl WinEventKind {
             WinEventKind::AppClose => "app.close",
             WinEventKind::AppFocus => "app.focus",
             WinEventKind::HookRecovered => "hook.recovered",
+            WinEventKind::HookRecoveryFailed => "hook.recovery_failed",
         }
     }
 }
@@ -120,6 +126,49 @@ fn sha256_hex(bytes: &[u8]) -> String {
     s
 }
 
+/// Frozen log schema version (council condition 1, cycle 18
+/// documentation, cycle 19 mechanical). Every JSONL line carries
+/// `"schema": 1`. Any rename/redefinition raises this version, with
+/// a council note and a doc update.
+pub const LOG_SCHEMA: u64 = 1;
+
+/// Verify a trial-log file: every non-empty line must parse as JSON
+/// and carry `"schema": 1`. A line without a schema field, or with
+/// an unknown version, is rejected (fail-closed). Returns the number
+/// of lines verified.
+pub fn verify_log_file(path: &std::path::Path) -> Result<usize, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
+    let mut lines = 0usize;
+    for (i, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        lines += 1;
+        let v: Value = serde_json::from_str(line)
+            .map_err(|e| format!("line {}: not valid JSON: {}", i + 1, e))?;
+        match v.get("schema").and_then(|x| x.as_u64()) {
+            Some(s) if s == LOG_SCHEMA => {}
+            Some(s) => {
+                return Err(format!(
+                    "line {}: unknown schema version {} (expected {})",
+                    i + 1,
+                    s,
+                    LOG_SCHEMA
+                ))
+            }
+            None => {
+                return Err(format!(
+                    "line {}: missing \"schema\" field (expected {})",
+                    i + 1,
+                    LOG_SCHEMA
+                ))
+            }
+        }
+    }
+    Ok(lines)
+}
+
 /// Append-only trial log in the eye format: every line carries `seq`,
 /// `ts`, `prev_hash` and `hash` (hash = sha256 of the canonical line
 /// bytes chained on the previous hash). Same format as the safe core,
@@ -166,6 +215,7 @@ impl TrialLog {
 
     pub fn write(&mut self, event: &WinEvent) {
         let mut v = event.to_json();
+        v["schema"] = json!(LOG_SCHEMA);
         v["seq"] = json!(self.seq);
         v["ts"] = json!(utc_now_rfc3339());
         v["prev_hash"] = json!(self.prev_hash);
@@ -198,9 +248,59 @@ mod tests {
         assert_eq!(WinEventKind::AppClose.type_str(), "app.close");
         assert_eq!(WinEventKind::AppFocus.type_str(), "app.focus");
         assert_eq!(WinEventKind::HookRecovered.type_str(), "hook.recovered");
+        assert_eq!(
+            WinEventKind::HookRecoveryFailed.type_str(),
+            "hook.recovery_failed"
+        );
         // And they are NOT the snapshotter names.
         assert_ne!(WinEventKind::AppOpen.type_str(), "proc.seen");
         assert_ne!(WinEventKind::AppClose.type_str(), "proc.gone");
+    }
+
+    #[test]
+    fn trial_log_lines_carry_schema_1() {
+        let dir = std::env::temp_dir().join("bimo-wintrack-test-schema");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("trial.jsonl");
+        let ev = WinEvent {
+            kind: WinEventKind::AppFocus,
+            pid: 1234,
+            exe: "notepad.exe".to_string(),
+            hwnd: 99,
+            after_ms: None,
+            reason: None,
+        };
+        {
+            let mut log = TrialLog::open(path.clone()).unwrap();
+            log.write(&ev);
+            log.write(&ev);
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        for line in text.lines() {
+            let v: Value = serde_json::from_str(line).unwrap();
+            assert_eq!(v["schema"], LOG_SCHEMA);
+        }
+        assert_eq!(verify_log_file(&path).unwrap(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn verify_rejects_missing_or_unknown_schema() {
+        let dir = std::env::temp_dir().join("bimo-wintrack-test-schema-bad");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("trial.jsonl");
+        // A line with no schema field at all.
+        std::fs::write(&path, "{\"type\":\"app.open\",\"seq\":0,\"schema\":1}\n{\"type\":\"app.focus\",\"seq\":1}\n").unwrap();
+        let err = verify_log_file(&path).unwrap_err();
+        assert!(err.contains("line 2"), "{}", err);
+        assert!(err.contains("missing"), "{}", err);
+        // A line with an unknown schema version.
+        std::fs::write(&path, "{\"type\":\"app.open\",\"seq\":0,\"schema\":2}\n").unwrap();
+        let err = verify_log_file(&path).unwrap_err();
+        assert!(err.contains("unknown schema version 2"), "{}", err);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
