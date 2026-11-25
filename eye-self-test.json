@@ -27,12 +27,12 @@
       "status": "pass"
     },
     {
-      "detail": "3 file.completed events for setup.exe; the change must be reported",
+      "detail": "4 file.completed events for setup.exe; the change must be reported",
       "name": "second completion observed for setup.exe",
       "status": "pass"
     },
     {
-      "detail": "3 file.hash events for setup.exe; first hash must differ from last",
+      "detail": "4 file.hash events for setup.exe; first hash must differ from last",
       "name": "file re-hashed after later change",
       "status": "pass"
     },
@@ -47,7 +47,7 @@
       "status": "pass"
     },
     {
-      "detail": "188 lines verified",
+      "detail": "201 lines verified",
       "name": "hash chain valid",
       "status": "pass"
     },
@@ -82,8 +82,23 @@
       "status": "pass"
     },
     {
-      "detail": "188 events checked",
+      "detail": "201 events checked",
       "name": "every log line carries schema 1",
+      "status": "pass"
+    },
+    {
+      "detail": "the periodic folder reconciler must emit a summary event",
+      "name": "eye.reconciled present (reconciler thread runs)",
+      "status": "pass"
+    },
+    {
+      "detail": "the start-time wipe must report the seeded old log + shot + heartbeat",
+      "name": "eye.wiped present with the seeded files counted",
+      "status": "pass"
+    },
+    {
+      "detail": "eye.wipe must delete prior shot files",
+      "name": "seeded plain shot file is gone after wipe",
       "status": "pass"
     },
     {
@@ -113,7 +128,7 @@
     }
   ],
   "crypto": "dpapi",
-  "events_total": 188,
+  "events_total": 201,
   "honest_limits": [
     "runner numbers do not prove device performance (flawhunt 11-z)",
     "no real fullscreen game on the runner; game capture is decided on the Legion (second gate)",
@@ -123,9 +138,9 @@
     "shots not wired in this build: shot check skipped (feature `eye-shots` + Windows required)"
   ],
   "resources": {
-    "cpu_seconds": 0.15625,
-    "elapsed_seconds": 39.0647076,
-    "rss_kb": 8312
+    "cpu_seconds": 0.1875,
+    "elapsed_seconds": 39.062397,
+    "rss_kb": 8332
   },
   "verdict": "pass"
 }
