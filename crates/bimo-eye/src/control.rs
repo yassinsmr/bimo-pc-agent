@@ -62,20 +62,46 @@ pub fn start_control(
     stopped: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     heartbeat_secs: u64,
+    game_mode: Arc<AtomicBool>,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let stop_file = data_dir.join("eye.stop");
         let pause_file = data_dir.join("eye.pause");
         let heartbeat_file = data_dir.join("heartbeat.json");
         let stopped_file = data_dir.join("eye.stopped");
+    let gamemode_file = data_dir.join("eye.gamemode");
+    let wipe_file = data_dir.join("eye.wipe");
+    // Game mode is start-time config OR the flag file: either one
+    // turns it on (cycle 31 — the flag lets the game-mode unit
+    // toggle it at runtime later).
+    let initial_game_mode = game_mode.load(Ordering::Relaxed);
+    let mut wipe_notified = false;
         let mut was_stopped = false;
         let mut last_heartbeat = std::time::Instant::now()
             - Duration::from_secs(heartbeat_secs); // beat immediately
         while !stop.load(Ordering::Relaxed) {
+
             let is_stopped = stop_file.exists();
             let is_paused = pause_file.exists() || is_stopped;
             stopped.store(is_stopped, Ordering::Relaxed);
             paused.store(is_paused, Ordering::Relaxed);
+        // Game mode: config OR flag file (cycle 31).
+        game_mode.store(
+            initial_game_mode || gamemode_file.exists(),
+            Ordering::Relaxed,
+        );
+        // A wipe requested mid-run applies on the NEXT start only
+        // (cycle 31): deleting the log under the running writer
+        // would race it. One warning, then silence until removed.
+        if wipe_file.exists() && !wipe_notified {
+            wipe_notified = true;
+            let _ = tx.send(EyeEvent::Warning {
+                message: "eye.wipe requested while running — applies on next start; eye data NOT deleted mid-run".to_string(),
+            });
+        }
+        if !wipe_file.exists() {
+            wipe_notified = false;
+        }
             if is_stopped && !was_stopped {
                 // Stop leaves a trace outside the log (condition 5).
                 let _ = std::fs::remove_file(&heartbeat_file);

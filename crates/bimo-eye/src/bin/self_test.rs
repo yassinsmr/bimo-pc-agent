@@ -69,7 +69,7 @@ fn has_event_reason(events: &[serde_json::Value], ty: &str, reason: &str) -> boo
     })
 }
 
-fn main() {
+fn main() { eprintln!("[trace] main start");
     let args: Vec<String> = std::env::args().collect();
     let mut out = PathBuf::from("eye-self-test.json");
     let mut work = std::env::temp_dir().join(format!(
@@ -138,11 +138,21 @@ fn main() {
         }
     }
 
+    // Cycle-31 close-out: seed prior eye data + eye.wipe BEFORE the
+    // eye starts, so the start-time wipe has something to delete.
+    {
+        let _ = std::fs::write(data_dir.join("eye-events.jsonl"), b"{\"type\":\"old\"}\n");
+        let _ = std::fs::create_dir_all(data_dir.join("shots"));
+        let _ = std::fs::write(data_dir.join("shots").join("shot-000001.jpg"), b"old shot");
+        let _ = std::fs::write(data_dir.join("heartbeat.json"), b"{\"ts\":\"old\"}");
+        let _ = std::fs::write(data_dir.join("eye.wipe"), b"wipe");
+    }
     let cfg = EyeConfig {
         watch_dirs: vec![downloads.clone(), desktop.clone(), documents.clone()],
         data_dir: data_dir.clone(),
         debounce_secs: 2,
         snapshot_secs: 3,
+        reconcile_secs: 3,
         heartbeat_secs: 5,
         game_mode: false,
     };
@@ -226,7 +236,21 @@ fn main() {
         std::thread::sleep(Duration::from_secs(25));
     }
 
-    // Let the hash worker catch up.
+    eprintln!("[trace] before deferred alert-shot request"); // 4c. Game mode (cycle 31, fallback (ج) cycle 35): an alert
+    // shot while gaming is deferred, and dropped at stop.
+    #[cfg(all(feature = "eye-shots", windows))]
+    let deferred_drop = {
+        let before = count_type_in_log(&data_dir, "shot.taken");
+        let gamemode_file = data_dir.join("eye.gamemode");
+        let req_ok = std::fs::write(&gamemode_file, b"game").is_ok()
+            && handle.request_shot("alert:self-test-deferred").is_ok();
+        std::thread::sleep(Duration::from_secs(3));
+        // Gaming stays ON until handle.stop(): the deferred shot must
+        // still be pending then, so stop() drops it (cycle 35).
+        (req_ok, before)
+
+    };
+    eprintln!("[trace] after deferred alert-shot request"); // Let the hash worker catch up.
     std::thread::sleep(Duration::from_secs(3));
 
     // 5. stop-file test: while stopped, a new file must NOT be logged.
@@ -255,11 +279,11 @@ fn main() {
         _ => false,
     };
 
-    handle.stop();
+    eprintln!("[trace] before handle.stop()"); handle.stop(); eprintln!("[trace] after handle.stop()");
 
     // 6. verify the log
     let (rss_kb, cpu_seconds) = sample_resources();
-    let report = verify_log(&data_dir);
+    eprintln!("[trace] before verify_log"); let report = verify_log(&data_dir); eprintln!("[trace] after verify_log");
     let (events, chain_valid, crypto) = match &report {
         Ok(rep) => {
             let crypto = rep
@@ -440,6 +464,24 @@ fn main() {
         schema_ok,
         format!("{} events checked", events.len()),
     );
+    check(
+        "eye.reconciled present (reconciler thread runs)",
+        has_event(&events, "eye.reconciled", None),
+        "the periodic folder reconciler must emit a summary event".to_string(),
+    );
+    check(
+        "eye.wiped present with the seeded files counted",
+        events.iter().any(|e| {
+            e.get("type").and_then(|v| v.as_str()) == Some("eye.wiped")
+                && e.get("removed_files").and_then(|v| v.as_u64()).unwrap_or(0) >= 3
+        }),
+        "the start-time wipe must report the seeded old log + shot + heartbeat".to_string(),
+    );
+    check(
+        "seeded plain shot file is gone after wipe",
+        !data_dir.join("shots").join("shot-000001.jpg").exists(),
+        "eye.wipe must delete prior shot files".to_string(),
+    );
     if !cfg!(windows) {
         notes.push(
             "not a Windows build: window-event checks skipped, not failed (hook is Windows-only)"
@@ -553,6 +595,88 @@ fn main() {
             status,
             detail,
         });
+        // Cycle 31: game-mode deferral — shot.deferred must be in the
+        // log. Cycle 35 (ج): the deferred shot is dropped at stop
+        // instead of running after gaming ends.
+        let deferred_seen = events.iter().any(|e| {
+            e.get("type").and_then(|v| v.as_str()) == Some("shot.deferred")
+                && e.get("reason").and_then(|v| v.as_str()) == Some("alert:self-test-deferred")
+        });
+        if !deferred_seen {
+            fail = true;
+        }
+        checks.push(Check {
+            name: "alert shot deferred while gaming (shot.deferred)",
+            status: if deferred_seen { "pass" } else { "fail" },
+            detail: "alert:* request during game mode must emit shot.deferred, not execute".to_string(),
+        });
+                let (deferred_req_ok, deferred_before) = deferred_drop;
+        let taken_after_stop = count_type_in_log(&data_dir, "shot.taken");
+        let deferred_dropped = deferred_req_ok && taken_after_stop == deferred_before;
+        
+        let (def_status, def_detail): (&'static str, String) = if deferred_dropped {
+            (
+                "pass",
+                "deferred alert shot dropped at stop: no extra shot.taken after stop".to_string(),
+            )
+        } else {
+            (
+                "fail",
+                "deferred alert shot was not dropped at stop".to_string(),
+            )
+        };
+        if def_status == "fail" {
+            fail = true;
+        }
+        checks.push(Check {
+            name: "deferred alert shot dropped at stop",
+            status: def_status,
+            detail: def_detail,
+        });
+        // Cycle 31: toast probe — an alert shot executed (or failed)
+        // must have attempted a toast; the probe file proves it.
+        let probe = std::fs::read_to_string(data_dir.join("toast.probe"))
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+        let (probe_status, probe_detail): (&'static str, String) =
+            if deferred_dropped {
+                    ("skip", "deferred shot dropped at stop, so no toast was attempted".to_string())
+            } else {
+            match probe
+                .as_ref()
+                .and_then(|v| v.get("attempted"))
+                .and_then(|v| v.as_bool())
+            {
+                Some(true) => {
+                    let ok = probe
+                        .as_ref()
+                        .and_then(|v| v.get("ok"))
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let err = probe
+                        .as_ref()
+                        .and_then(|v| v.get("error"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    (
+                        "pass",
+                        format!("toast attempted: ok={ok}, error='{err}'"),
+                    )
+                }
+                _ => (
+                    "fail",
+                    "no toast attempt recorded despite an alert shot".to_string(),
+                ),
+            }
+            };
+        if probe_status == "fail" {
+            fail = true;
+        }
+        checks.push(Check {
+            name: "toast probe recorded for alert shot",
+            status: probe_status,
+            detail: probe_detail,
+        });
     }
     #[cfg(not(all(feature = "eye-shots", windows)))]
     notes.push(
@@ -567,7 +691,7 @@ fn main() {
     }
 
     let verdict = if fail { "fail" } else { "pass" };
-    write_report(
+    eprintln!("[trace] before write_report"); write_report(
         &out,
         verdict,
         &crypto,
@@ -579,6 +703,13 @@ fn main() {
     );
     println!("eye self-test: {verdict} ({} events)", events.len());
     std::process::exit(if fail { 1 } else { 0 });
+}
+
+#[cfg(all(feature = "eye-shots", windows))]
+fn count_type_in_log(data_dir: &Path, ty: &str) -> usize {
+    let path = data_dir.join("eye-events.jsonl");
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    text.lines().filter(|l| l.contains(ty)).count()
 }
 
 fn write_file(path: &Path, data: &[u8]) {

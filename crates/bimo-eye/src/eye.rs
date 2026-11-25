@@ -40,6 +40,7 @@ pub struct EyeConfig {
     pub data_dir: PathBuf,
     pub debounce_secs: u64,
     pub snapshot_secs: u64,
+    pub reconcile_secs: u64,
     pub heartbeat_secs: u64,
     pub game_mode: bool,
 }
@@ -51,6 +52,7 @@ impl Default for EyeConfig {
             data_dir: PathBuf::from("bimo-eye-data"),
             debounce_secs: 2,
             snapshot_secs: 10,
+        reconcile_secs: 300,
             heartbeat_secs: 30,
             game_mode: false,
         }
@@ -73,26 +75,34 @@ pub struct EyeHandle {
 impl EyeHandle {
     /// Graceful stop: signals every thread, joins them, the writer
     /// records a final `agent.stop` and closes the log.
-    pub fn stop(mut self) {
+    pub fn stop(mut self) { eprintln!("[trace] stop() entry");
         self.stop_flag.store(true, Ordering::Relaxed);
         // The bridge exits on the stop flag (≤200 ms poll); join it
         // first so its channel clone drops, then stop the tracker
         // (joins its pump + watchdog), then the other producers.
         if let Some(h) = self.win_bridge.take() {
-            let _ = h.join();
+            join_timeout(h, "win_bridge");
         }
-        if let Some(t) = self.wintrack.take() {
-            t.stop();
+        eprintln!("[trace] before WinTrack stop"); if let Some(t) = self.wintrack.take() {
+            t.stop(); eprintln!("[trace] after WinTrack stop");
         }
         // Shot producer next (≤500 ms poll + session stop): join it
         // before the writer so its channel clone drops and the writer
         // can exit once every other producer is gone.
         if let Some(h) = self.shot_producer.take() {
-            let _ = h.join();
+            join_timeout(h, "shot producer");
         }
-        for h in self.handles.drain(..) {
-            let _ = h.join();
+
+        // Join order is start() order: watcher, snapshot, hash,
+        // reconcile, control, writer.
+        let handle_names = ["watcher", "snapshot", "hash", "reconcile", "control", "writer"];
+        for (i, h) in self.handles.drain(..).enumerate() {
+            let name = handle_names.get(i).copied().unwrap_or("unknown");
+
+            join_timeout(h, name);
+
         }
+        eprintln!("[trace] stop() end");
     }
 
     pub fn log_path(&self) -> PathBuf {
@@ -181,6 +191,13 @@ fn start_window_producer(
 pub fn start(cfg: EyeConfig) -> Result<EyeHandle, String> {
     std::fs::create_dir_all(&cfg.data_dir)
         .map_err(|e| format!("cannot create data dir: {e}"))?;
+    // Start-time wipe (cycle 31): `eye.wipe` present means the
+    // operator wants prior eye data gone BEFORE a fresh log opens.
+    let wiped = if cfg.data_dir.join("eye.wipe").exists() {
+        Some(wipe_data_dir(&cfg.data_dir))
+    } else {
+        None
+    };
     let (mut writer, resume_note) = LogWriter::open(&cfg.data_dir)?;
     let log_path = writer.path();
     let crypto_mode = writer.crypto();
@@ -200,6 +217,12 @@ pub fn start(cfg: EyeConfig) -> Result<EyeHandle, String> {
         scope_note: scope_note.clone(),
         crypto: crypto_mode.as_str().to_string(),
     })?;
+    if let Some((removed_files, freed_bytes)) = wiped {
+        writer.write(&EyeEvent::EyeWiped {
+            removed_files,
+            freed_bytes,
+        })?;
+    }
     if let Some(note) = resume_note {
         writer.write(&EyeEvent::Warning { message: note })?;
     }
@@ -228,7 +251,9 @@ pub fn start(cfg: EyeConfig) -> Result<EyeHandle, String> {
     let writer_dropped_hashes = dropped_hashes.clone();
     let win_dropped_events = dropped_events.clone();
     let writer_handle = std::thread::spawn(move || {
+
         writer_loop(writer, rx, hash_tx, writer_dropped_events, writer_dropped_hashes);
+
     });
 
     let watcher_handle = watch::start_watcher(
@@ -251,6 +276,13 @@ pub fn start(cfg: EyeConfig) -> Result<EyeHandle, String> {
         game_mode.clone(),
         stop_flag.clone(),
     );
+    let reconcile_handle = crate::reconcile::start_reconciler(
+        cfg.watch_dirs.clone(),
+        tx.clone(),
+        paused.clone(),
+        stop_flag.clone(),
+        Duration::from_secs(cfg.reconcile_secs),
+    );
     let control_handle = control::start_control(
         cfg.data_dir.clone(),
         tx.clone(),
@@ -258,6 +290,7 @@ pub fn start(cfg: EyeConfig) -> Result<EyeHandle, String> {
         stopped.clone(),
         stop_flag.clone(),
         cfg.heartbeat_secs,
+        game_mode.clone(),
     );
 
     let (wintrack, win_bridge) = start_window_producer(
@@ -275,6 +308,7 @@ pub fn start(cfg: EyeConfig) -> Result<EyeHandle, String> {
         tx.clone(),
         cfg.data_dir.clone(),
         stop_flag.clone(),
+        game_mode.clone(),
     ));
     #[cfg(not(all(feature = "eye-shots", windows)))]
     let shot_producer: Option<JoinHandle<()>> = None;
@@ -291,6 +325,7 @@ pub fn start(cfg: EyeConfig) -> Result<EyeHandle, String> {
             watcher_handle,
             snapshot_handle,
             hash_handle,
+            reconcile_handle,
             control_handle,
             writer_handle,
         ],
@@ -379,6 +414,59 @@ fn writer_loop(
     writer.close();
 }
 
+/// Delete prior eye data for `eye.wipe` (cycle-31 close-out).
+/// Removes the log (+ rotations), all shot files, heartbeat /
+/// stopped markers and a stale shot request. Never touches
+/// `eye.stop` / `eye.pause` (operator intent) or the data dir
+/// itself. Best effort: returns (files removed, bytes freed).
+/// The `eye.wipe` flag itself is removed last, so a crash
+/// mid-wipe re-wipes idempotently on the next start.
+fn wipe_data_dir(data_dir: &Path) -> (u64, u64) {
+    let mut removed = 0u64;
+    let mut freed = 0u64;
+    if let Ok(entries) = std::fs::read_dir(data_dir) {
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.starts_with("eye-events") {
+                let p = e.path();
+                if let Ok(m) = e.metadata() {
+                    let size = m.len();
+                    if std::fs::remove_file(&p).is_ok() {
+                        removed += 1;
+                        freed += size;
+                    }
+                }
+            }
+        }
+    }
+    let shots = data_dir.join("shots");
+    if let Ok(entries) = std::fs::read_dir(&shots) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if let Ok(m) = e.metadata() {
+                let size = m.len();
+                if std::fs::remove_file(&p).is_ok() {
+                    removed += 1;
+                    freed += size;
+                }
+            }
+        }
+    }
+    let _ = std::fs::remove_dir(&shots);
+    for f in ["heartbeat.json", "eye.stopped", "shot.request"] {
+        let p = data_dir.join(f);
+        if let Ok(m) = std::fs::metadata(&p) {
+            let size = m.len();
+            if std::fs::remove_file(&p).is_ok() {
+                removed += 1;
+                freed += size;
+            }
+        }
+    }
+    let _ = std::fs::remove_file(data_dir.join("eye.wipe"));
+    (removed, freed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -398,5 +486,21 @@ mod tests {
         }
         assert_eq!(c.load(Ordering::Relaxed), 0);
         assert!(take_gap_event(&c, "x").is_none());
+    }
+}
+
+/// Join a thread with a 10 s safety net (fallback (ج), cycle 35):
+/// std has no `JoinHandle::join_timeout`, so the join runs on a
+/// helper thread and we wait at most 10 s for it. A thread that
+/// does not exit in time is left running (detached) and stop()
+/// proceeds — this is a safety net only, not a shutdown fix.
+fn join_timeout(handle: JoinHandle<()>, name: &str) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(handle.join());
+    });
+    match rx.recv_timeout(Duration::from_secs(10)) {
+        Ok(_) => eprintln!("[trace] after join {name}"),
+        Err(_) => eprintln!("[trace] join {name} timed out after 10s; proceeding"),
     }
 }

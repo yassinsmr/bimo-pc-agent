@@ -28,7 +28,7 @@ use crate::EyeEvent;
 /// under these names.
 const TEMP_SUFFIXES: [&str; 3] = [".tmp", ".part", ".crdownload"];
 
-fn is_temp_name(path: &Path) -> bool {
+pub(crate) fn is_temp_name(path: &Path) -> bool {
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().to_lowercase())
