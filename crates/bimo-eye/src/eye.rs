@@ -1,9 +1,13 @@
-//! Orchestration (spec section 4): five threads + one writer.
+//! Orchestration (spec section 4): six producers + one writer.
 //!
 //! - watcher: raw file events (debounced 2 s) → channel
 //! - snapshotter: process list every N s → channel
 //! - hash worker: SHA-256 of installers/archives → channel
 //! - control: stop/pause flag files + heartbeat → channel
+//! - window tracker (cycle-21 merge): `SetWinEventHook` events via
+//!   `bimo-wintrack`, bridged into the same channel (Windows only;
+//!   skipped entirely off Windows). Routine events: dropped + counted
+//!   (`log.gap`) when the bounded queue is full, never blocking.
 //! - writer (single): owns the JSONL log + hash chain; forwards
 //!   hashable files to the hash worker and emits `install.detected`
 //!   (always low confidence) for `.exe` / `.msi` completions.
@@ -53,6 +57,10 @@ pub struct EyeHandle {
     pub data_dir: PathBuf,
     stop_flag: Arc<AtomicBool>,
     handles: Vec<JoinHandle<()>>,
+    /// Window tracker (Windows only). `None` off Windows.
+    wintrack: Option<bimo_wintrack::WinTrack>,
+    /// Bridge thread: `WinEvent` → `EyeEvent` into the eye channel.
+    win_bridge: Option<JoinHandle<()>>,
 }
 
 impl EyeHandle {
@@ -60,6 +68,15 @@ impl EyeHandle {
     /// records a final `agent.stop` and closes the log.
     pub fn stop(mut self) {
         self.stop_flag.store(true, Ordering::Relaxed);
+        // The bridge exits on the stop flag (≤200 ms poll); join it
+        // first so its channel clone drops, then stop the tracker
+        // (joins its pump + watchdog), then the other producers.
+        if let Some(h) = self.win_bridge.take() {
+            let _ = h.join();
+        }
+        if let Some(t) = self.wintrack.take() {
+            t.stop();
+        }
         for h in self.handles.drain(..) {
             let _ = h.join();
         }
@@ -83,6 +100,51 @@ fn is_installer(path: &Path) -> bool {
 /// Verify the current log file in `data_dir`.
 pub fn verify_log(data_dir: &Path) -> Result<VerifyReport, String> {
     verify_file(&data_dir.join("eye-events.jsonl"))
+}
+
+/// Start the window-event producer (cycle-21 merge, Windows only).
+///
+/// Returns `(tracker, bridge-thread)`. Off Windows both are `None`:
+/// the eye runs exactly as before, with no window thread at all.
+/// On Windows a failed hook install FAILS the eye start (fail-closed:
+/// a silently blind eye is worse than a stopped one — the self-test
+/// catches it on CI before any real run).
+///
+/// The bridge converts each `WinEvent` to an `EyeEvent` and
+/// `try_send`s it into the bounded eye channel: window events are
+/// routine, so a full queue drops + counts them (`log.gap`) instead
+/// of blocking the hook thread. The bridge polls with a 200 ms
+/// timeout and exits when the stop flag is set.
+fn start_window_producer(
+    tx: SyncSender<EyeEvent>,
+    stop_flag: Arc<AtomicBool>,
+    dropped_events: Arc<AtomicU64>,
+) -> Result<(Option<bimo_wintrack::WinTrack>, Option<JoinHandle<()>>), String> {
+    if !bimo_wintrack::tracker_supported() {
+        return Ok((None, None));
+    }
+    let (win_tx, win_rx) = std::sync::mpsc::channel::<bimo_wintrack::WinEvent>();
+    let tracker = bimo_wintrack::WinTrack::start(win_tx)
+        .map_err(|e| format!("window tracker failed to start: {e}"))?;
+    let bridge = std::thread::spawn(move || {
+        loop {
+            match win_rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(wev) => {
+                    let ev = EyeEvent::from(wev);
+                    if tx.try_send(ev).is_err() {
+                        dropped_events.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if stop_flag.load(Ordering::Relaxed) {
+                        break;
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+    });
+    Ok((Some(tracker), Some(bridge)))
 }
 
 pub fn start(cfg: EyeConfig) -> Result<EyeHandle, String> {
@@ -133,6 +195,7 @@ pub fn start(cfg: EyeConfig) -> Result<EyeHandle, String> {
     // Writer thread: owns the log, forwards hash work, infers installs.
     let writer_dropped_events = dropped_events.clone();
     let writer_dropped_hashes = dropped_hashes.clone();
+    let win_dropped_events = dropped_events.clone();
     let writer_handle = std::thread::spawn(move || {
         writer_loop(writer, rx, hash_tx, writer_dropped_events, writer_dropped_hashes);
     });
@@ -166,6 +229,12 @@ pub fn start(cfg: EyeConfig) -> Result<EyeHandle, String> {
         cfg.heartbeat_secs,
     );
 
+    let (wintrack, win_bridge) = start_window_producer(
+        tx.clone(),
+        stop_flag.clone(),
+        win_dropped_events,
+    )?;
+
     // Drop the original sender: the writer exits when every producer
     // thread has ended and dropped its own clone.
     drop(tx);
@@ -181,6 +250,8 @@ pub fn start(cfg: EyeConfig) -> Result<EyeHandle, String> {
             control_handle,
             writer_handle,
         ],
+        wintrack,
+        win_bridge,
     })
 }
 
