@@ -78,7 +78,7 @@ jobs:
         timeout-minutes: 3
         run: .\target\x86_64-pc-windows-msvc\release\eye-shot-spike.exe --check one-frame-stop
 
-      - name: Check 3 — shot cost, re-measured (council c26: 5 frames, 1 cold + 4 warm)
+      - name: "Check 3 — shot cost, re-measured (council c26: 5 frames, 1 cold + 4 warm)"
         continue-on-error: true
         timeout-minutes: 3
         run: .\target\x86_64-pc-windows-msvc\release\eye-shot-spike.exe --check shot-cost
