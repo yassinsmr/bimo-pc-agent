@@ -92,8 +92,18 @@ impl EyeHandle {
         eprintln!("[trace] before join shot producer"); if let Some(h) = self.shot_producer.take() {
             let _ = h.join(); eprintln!("[trace] after join shot producer");
         }
-        eprintln!("[trace] before join remaining handles"); for h in self.handles.drain(..) {
-            let _ = h.join(); eprintln!("[trace] after join remaining handles"); } eprintln!("[trace] stop() end"); }
+        eprintln!("[trace] before join remaining handles");
+        // Join order is start() order: watcher, snapshot, hash,
+        // reconcile, control, writer.
+        let handle_names = ["watcher", "snapshot", "hash", "reconcile", "control", "writer"];
+        for (i, h) in self.handles.drain(..).enumerate() {
+            let name = handle_names.get(i).copied().unwrap_or("unknown");
+            eprintln!("[trace] before join {}", name);
+            let _ = h.join();
+            eprintln!("[trace] after join {}", name);
+        }
+        eprintln!("[trace] stop() end");
+    }
 
     pub fn log_path(&self) -> PathBuf {
         self.log_path.clone()
