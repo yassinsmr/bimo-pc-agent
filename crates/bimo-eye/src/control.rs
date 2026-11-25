@@ -80,6 +80,7 @@ pub fn start_control(
         let mut last_heartbeat = std::time::Instant::now()
             - Duration::from_secs(heartbeat_secs); // beat immediately
         while !stop.load(Ordering::Relaxed) {
+            eprintln!("[diag] control tick");
             let is_stopped = stop_file.exists();
             let is_paused = pause_file.exists() || is_stopped;
             stopped.store(is_stopped, Ordering::Relaxed);
