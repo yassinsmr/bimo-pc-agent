@@ -218,7 +218,10 @@ fn check_one_shot() -> (bool, String) {
     service.stop();
     match outcome {
         ShotOutcome::Taken(info) => {
-            let bytes = match fs::read(&info.file) {
+            // Cycle 31: shot files are DPAPI-encrypted on disk
+            // (shot-*.jpg.dpapi). The SOF check must unprotect first;
+            // the raw bytes must NOT be a JPEG (encryption proof).
+            let raw = match fs::read(&info.file) {
                 Ok(b) => b,
                 Err(e) => {
                     return (
@@ -227,14 +230,25 @@ fn check_one_shot() -> (bool, String) {
                     )
                 }
             };
+            let encrypted_name = info.file.extension().and_then(|e| e.to_str()) == Some("dpapi");
+            let raw_not_jpeg = !raw.starts_with(&[0xFF, 0xD8, 0xFF]);
+            let bytes = match bimo_shot::crypto::unprotect_bytes(&raw) {
+                Ok(b) => b,
+                Err(e) => {
+                    return (
+                        false,
+                        format!("{{\"error\":\"cannot unprotect shot file: {}\"}}", json_escape(&e)),
+                    )
+                }
+            };
             let dims = jpeg_dimensions(&bytes);
             let dims_ok = dims == Some((info.width, info.height));
             let width_ok = info.width <= 1920;
-            let ok = dims_ok && width_ok && info.bytes == bytes.len() as u64 && bytes.len() > 1000;
+            let ok = dims_ok && width_ok && info.bytes == raw.len() as u64 && bytes.len() > 1000 && encrypted_name && raw_not_jpeg;
             (
                 ok,
                 format!(
-                    "{{\"file\":\"{}\",\"width\":{},\"height\":{},\"bytes\":{},\"quality\":\"{}\",\"cold\":{},\"wait_ms\":{},\"encode_ms\":{},\"jpeg_magic_ok\":{},\"sof_dimensions_match\":{},\"width_le_1920\":{},\"note\":\"one frame from the persistent session; quality 80 + max width 1920 via WIC (or wic-default-fallback, recorded)\"}}",
+                    "{{\"file\":\"{}\",\"width\":{},\"height\":{},\"bytes\":{},\"quality\":\"{}\",\"cold\":{},\"wait_ms\":{},\"encode_ms\":{},\"jpeg_magic_ok\":{},\"sof_dimensions_match\":{},\"width_le_1920\":{},\"encrypted_name\":{},\"raw_not_jpeg\":{},\"note\":\"one frame from the persistent session; quality 80 + max width 1920 via WIC (or wic-default-fallback, recorded)\"}}",
                     json_escape(&info.file.display().to_string()),
                     info.width,
                     info.height,
@@ -245,7 +259,9 @@ fn check_one_shot() -> (bool, String) {
                     info.encode_ms,
                     bytes.starts_with(&[0xFF, 0xD8, 0xFF]),
                     dims_ok,
-                    width_ok
+                    width_ok,
+                    encrypted_name,
+                    raw_not_jpeg
                 ),
             )
         }
