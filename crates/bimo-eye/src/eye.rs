@@ -40,6 +40,7 @@ pub struct EyeConfig {
     pub data_dir: PathBuf,
     pub debounce_secs: u64,
     pub snapshot_secs: u64,
+    pub reconcile_secs: u64,
     pub heartbeat_secs: u64,
     pub game_mode: bool,
 }
@@ -51,6 +52,7 @@ impl Default for EyeConfig {
             data_dir: PathBuf::from("bimo-eye-data"),
             debounce_secs: 2,
             snapshot_secs: 10,
+        reconcile_secs: 300,
             heartbeat_secs: 30,
             game_mode: false,
         }
@@ -181,6 +183,13 @@ fn start_window_producer(
 pub fn start(cfg: EyeConfig) -> Result<EyeHandle, String> {
     std::fs::create_dir_all(&cfg.data_dir)
         .map_err(|e| format!("cannot create data dir: {e}"))?;
+    // Start-time wipe (cycle 31): `eye.wipe` present means the
+    // operator wants prior eye data gone BEFORE a fresh log opens.
+    let wiped = if cfg.data_dir.join("eye.wipe").exists() {
+        Some(wipe_data_dir(&cfg.data_dir))
+    } else {
+        None
+    };
     let (mut writer, resume_note) = LogWriter::open(&cfg.data_dir)?;
     let log_path = writer.path();
     let crypto_mode = writer.crypto();
@@ -200,6 +209,12 @@ pub fn start(cfg: EyeConfig) -> Result<EyeHandle, String> {
         scope_note: scope_note.clone(),
         crypto: crypto_mode.as_str().to_string(),
     })?;
+    if let Some((removed_files, freed_bytes)) = wiped {
+        writer.write(&EyeEvent::EyeWiped {
+            removed_files,
+            freed_bytes,
+        })?;
+    }
     if let Some(note) = resume_note {
         writer.write(&EyeEvent::Warning { message: note })?;
     }
@@ -251,6 +266,13 @@ pub fn start(cfg: EyeConfig) -> Result<EyeHandle, String> {
         game_mode.clone(),
         stop_flag.clone(),
     );
+    let reconcile_handle = crate::reconcile::start_reconciler(
+        cfg.watch_dirs.clone(),
+        tx.clone(),
+        paused.clone(),
+        stop_flag.clone(),
+        Duration::from_secs(cfg.reconcile_secs),
+    );
     let control_handle = control::start_control(
         cfg.data_dir.clone(),
         tx.clone(),
@@ -258,6 +280,7 @@ pub fn start(cfg: EyeConfig) -> Result<EyeHandle, String> {
         stopped.clone(),
         stop_flag.clone(),
         cfg.heartbeat_secs,
+        game_mode.clone(),
     );
 
     let (wintrack, win_bridge) = start_window_producer(
@@ -275,6 +298,7 @@ pub fn start(cfg: EyeConfig) -> Result<EyeHandle, String> {
         tx.clone(),
         cfg.data_dir.clone(),
         stop_flag.clone(),
+        game_mode.clone(),
     ));
     #[cfg(not(all(feature = "eye-shots", windows)))]
     let shot_producer: Option<JoinHandle<()>> = None;
@@ -291,6 +315,7 @@ pub fn start(cfg: EyeConfig) -> Result<EyeHandle, String> {
             watcher_handle,
             snapshot_handle,
             hash_handle,
+            reconcile_handle,
             control_handle,
             writer_handle,
         ],
@@ -377,6 +402,59 @@ fn writer_loop(
         reason: "eye.stop".to_string(),
     });
     writer.close();
+}
+
+/// Delete prior eye data for `eye.wipe` (cycle-31 close-out).
+/// Removes the log (+ rotations), all shot files, heartbeat /
+/// stopped markers and a stale shot request. Never touches
+/// `eye.stop` / `eye.pause` (operator intent) or the data dir
+/// itself. Best effort: returns (files removed, bytes freed).
+/// The `eye.wipe` flag itself is removed last, so a crash
+/// mid-wipe re-wipes idempotently on the next start.
+fn wipe_data_dir(data_dir: &Path) -> (u64, u64) {
+    let mut removed = 0u64;
+    let mut freed = 0u64;
+    if let Ok(entries) = std::fs::read_dir(data_dir) {
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.starts_with("eye-events") {
+                let p = e.path();
+                if let Ok(m) = e.metadata() {
+                    let size = m.len();
+                    if std::fs::remove_file(&p).is_ok() {
+                        removed += 1;
+                        freed += size;
+                    }
+                }
+            }
+        }
+    }
+    let shots = data_dir.join("shots");
+    if let Ok(entries) = std::fs::read_dir(&shots) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if let Ok(m) = e.metadata() {
+                let size = m.len();
+                if std::fs::remove_file(&p).is_ok() {
+                    removed += 1;
+                    freed += size;
+                }
+            }
+        }
+    }
+    let _ = std::fs::remove_dir(&shots);
+    for f in ["heartbeat.json", "eye.stopped", "shot.request"] {
+        let p = data_dir.join(f);
+        if let Ok(m) = std::fs::metadata(&p) {
+            let size = m.len();
+            if std::fs::remove_file(&p).is_ok() {
+                removed += 1;
+                freed += size;
+            }
+        }
+    }
+    let _ = std::fs::remove_file(data_dir.join("eye.wipe"));
+    (removed, freed)
 }
 
 #[cfg(test)]
