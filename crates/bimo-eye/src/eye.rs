@@ -75,27 +75,25 @@ pub struct EyeHandle {
 impl EyeHandle {
     /// Graceful stop: signals every thread, joins them, the writer
     /// records a final `agent.stop` and closes the log.
-    pub fn stop(mut self) {
+    pub fn stop(mut self) { eprintln!("[trace] stop() entry");
         self.stop_flag.store(true, Ordering::Relaxed);
         // The bridge exits on the stop flag (≤200 ms poll); join it
         // first so its channel clone drops, then stop the tracker
         // (joins its pump + watchdog), then the other producers.
-        if let Some(h) = self.win_bridge.take() {
-            let _ = h.join();
+        eprintln!("[trace] before join win_bridge"); if let Some(h) = self.win_bridge.take() {
+            let _ = h.join(); eprintln!("[trace] after join win_bridge");
         }
-        if let Some(t) = self.wintrack.take() {
-            t.stop();
+        eprintln!("[trace] before WinTrack stop"); if let Some(t) = self.wintrack.take() {
+            t.stop(); eprintln!("[trace] after WinTrack stop");
         }
         // Shot producer next (≤500 ms poll + session stop): join it
         // before the writer so its channel clone drops and the writer
         // can exit once every other producer is gone.
-        if let Some(h) = self.shot_producer.take() {
-            let _ = h.join();
+        eprintln!("[trace] before join shot producer"); if let Some(h) = self.shot_producer.take() {
+            let _ = h.join(); eprintln!("[trace] after join shot producer");
         }
-        for h in self.handles.drain(..) {
-            let _ = h.join();
-        }
-    }
+        eprintln!("[trace] before join remaining handles"); for h in self.handles.drain(..) {
+            let _ = h.join(); eprintln!("[trace] after join remaining handles"); } eprintln!("[trace] stop() end"); }
 
     pub fn log_path(&self) -> PathBuf {
         self.log_path.clone()
