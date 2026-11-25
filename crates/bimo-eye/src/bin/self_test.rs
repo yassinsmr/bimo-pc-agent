@@ -69,7 +69,7 @@ fn has_event_reason(events: &[serde_json::Value], ty: &str, reason: &str) -> boo
     })
 }
 
-fn main() {
+fn main() { eprintln!("[trace] main start");
     let args: Vec<String> = std::env::args().collect();
     let mut out = PathBuf::from("eye-self-test.json");
     let mut work = std::env::temp_dir().join(format!(
@@ -236,7 +236,7 @@ fn main() {
         std::thread::sleep(Duration::from_secs(25));
     }
 
-    // 4c. Game mode (cycle 31): an alert shot while gaming is
+    eprintln!("[trace] before deferred alert-shot request"); // 4c. Game mode (cycle 31): an alert shot while gaming is
     // deferred, then runs when gaming ends.
     #[cfg(all(feature = "eye-shots", windows))]
     let deferred_shot_ok = {
@@ -250,7 +250,7 @@ fn main() {
         let after = count_type_in_log(&data_dir, "shot.taken");
         req_ok && after > before
     };
-    // Let the hash worker catch up.
+    eprintln!("[trace] after deferred alert-shot request"); // Let the hash worker catch up.
     std::thread::sleep(Duration::from_secs(3));
 
     // 5. stop-file test: while stopped, a new file must NOT be logged.
@@ -279,11 +279,11 @@ fn main() {
         _ => false,
     };
 
-    handle.stop();
+    eprintln!("[trace] before handle.stop()"); handle.stop(); eprintln!("[trace] after handle.stop()");
 
     // 6. verify the log
     let (rss_kb, cpu_seconds) = sample_resources();
-    let report = verify_log(&data_dir);
+    eprintln!("[trace] before verify_log"); let report = verify_log(&data_dir); eprintln!("[trace] after verify_log");
     let (events, chain_valid, crypto) = match &report {
         Ok(rep) => {
             let crypto = rep
@@ -695,7 +695,7 @@ fn main() {
     }
 
     let verdict = if fail { "fail" } else { "pass" };
-    write_report(
+    eprintln!("[trace] before write_report"); write_report(
         &out,
         verdict,
         &crypto,
