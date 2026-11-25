@@ -20,6 +20,7 @@ version = "0.1.0"
 name = "bimo-eye"
 version = "0.1.0"
 dependencies = [
+ "bimo-shot",
  "bimo-wintrack",
  "notify",
  "notify-debouncer-full",
@@ -34,6 +35,14 @@ version = "0.1.0"
 dependencies = [
  "bimo-core",
  "windows 0.61.3",
+]
+
+[[package]]
+name = "bimo-shot"
+version = "0.1.0"
+dependencies = [
+ "windows 0.62.2",
+ "windows-capture",
 ]
 
 [[package]]
