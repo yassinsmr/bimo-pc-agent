@@ -6,17 +6,17 @@
 #      `schema: 1`, GENESIS start — plaintext trial only).
 #   2. The capture session stops after exactly ONE frame (no second
 #      frame within 2 s — continuous recording is forbidden by design).
-#   3. Shot cost, RE-MEASURED per the council ruling (cycle 26): five
-#      frames in ONE process, frame 1 cold + frames 2-5 warm (same
-#      device, same session), with per-frame CPU (GetProcessTimes) and
-#      encode timings. Pre-set decision rules: setup >= 70% + warm
-#      median <= 5 ms CPU = pass; warm 5-15 ms + encode dominant =
-#      pass with definition_review (council fixes the new definition);
-#      warm > 15 ms = fail. Immediate stops: the session cannot
-#      deliver 5 frames (reuse-impossible); a warm encode alone
-#      > 25 ms. The old <5%-on-a-97ms-window definition is superseded
-#      (the council named it a category error); the old number is
-#      still reported as cpu_pct_old_definition for continuity.
+#   3. Shot cost, AGGREGATE per the council ruling (cycle 27): ten
+#      cold shots (a fresh session each) + 100 warm shots in ONE
+#      session, with per-shot CPU = total / N (the 15.625 ms tick
+#      error is then ~0.16 ms/shot) and raw QueryProcessCycleTime
+#      totals as supplementary evidence. Pre-set decision rules:
+#      warm per-shot <= 5 ms CPU = pass (merge PR #9); 5-15 ms =
+#      pass with definition_review (council fixes the new
+#      definition); > 15 ms = fail. Immediate stops: the session
+#      cannot deliver its frames (reuse-impossible); a warm encode
+#      alone > 25 ms wall. The cold aggregate is recorded, not
+#      gated (most v1 shots are cold, <= 1/min — see spec §6).
 #   4. DXGI Desktop Duplication fallback, only if Graphics Capture failed.
 # Failure of any core check (1-3) = spike fails = the shots build stops
 # (council condition 2). A no-frame timeout on a headless runner is
@@ -78,9 +78,9 @@ jobs:
         timeout-minutes: 3
         run: .\target\x86_64-pc-windows-msvc\release\eye-shot-spike.exe --check one-frame-stop
 
-      - name: "Check 3 — shot cost, re-measured (council c26: 5 frames, 1 cold + 4 warm)"
+      - name: "Check 3 - shot cost, aggregate (council c27: 10 cold + 100 warm)"
         continue-on-error: true
-        timeout-minutes: 3
+        timeout-minutes: 10
         run: .\target\x86_64-pc-windows-msvc\release\eye-shot-spike.exe --check shot-cost
 
       - name: Check 4 — DXGI fallback (only if primary failed)
@@ -119,7 +119,7 @@ jobs:
           # Move results aside first, check out, move them back.
           # (Fixed cycle 14: runs 45447770210 + 45441211553 failed here.)
           mkdir -p /tmp/shotspike-publish
-          for f in shot-spike-results.json shotspike-capture-works.json shotspike-one-frame-stop.json shotspike-shot-cost.json shotspike-dxgi-fallback.json shotspike-events.jsonl shotspike-shot.jpg shotspike-stop.jpg shotspike-cost-1.jpg shotspike-cost-2.jpg shotspike-cost-3.jpg shotspike-cost-4.jpg shotspike-cost-5.jpg shotspike-shot-dxgi.jpg; do
+          for f in shot-spike-results.json shotspike-capture-works.json shotspike-one-frame-stop.json shotspike-shot-cost.json shotspike-dxgi-fallback.json shotspike-events.jsonl shotspike-shot.jpg shotspike-stop.jpg shotspike-cost-cold-1-1.jpg shotspike-cost-warm-1.jpg shotspike-cost-warm-101.jpg shotspike-shot-dxgi.jpg; do
             [ -f "$f" ] && mv -f "$f" /tmp/shotspike-publish/
           done
           git fetch origin spike-results || true
@@ -130,7 +130,7 @@ jobs:
           fi
           mv -f /tmp/shotspike-publish/* . 2>/dev/null || true
           git add -f shot-spike-results.json shotspike-capture-works.json shotspike-one-frame-stop.json shotspike-shot-cost.json shotspike-dxgi-fallback.json shotspike-events.jsonl || true
-          git add -f shotspike-shot.jpg shotspike-stop.jpg shotspike-cost-1.jpg shotspike-cost-2.jpg shotspike-cost-3.jpg shotspike-cost-4.jpg shotspike-cost-5.jpg shotspike-shot-dxgi.jpg || true
+          git add -f shotspike-shot.jpg shotspike-stop.jpg shotspike-cost-cold-1-1.jpg shotspike-cost-warm-1.jpg shotspike-cost-warm-101.jpg shotspike-shot-dxgi.jpg || true
           if git diff --cached --quiet; then
             echo "no shot spike results to commit"
           else
@@ -152,11 +152,9 @@ jobs:
             shotspike-events.jsonl
             shotspike-shot.jpg
             shotspike-stop.jpg
-            shotspike-cost-1.jpg
-            shotspike-cost-2.jpg
-            shotspike-cost-3.jpg
-            shotspike-cost-4.jpg
-            shotspike-cost-5.jpg
+            shotspike-cost-cold-1-1.jpg
+            shotspike-cost-warm-1.jpg
+            shotspike-cost-warm-101.jpg
             shotspike-shot-dxgi.jpg
             target/x86_64-pc-windows-msvc/release/eye-shot-spike.exe
           retention-days: 30
