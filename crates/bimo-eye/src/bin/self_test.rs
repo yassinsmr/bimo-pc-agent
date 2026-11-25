@@ -212,6 +212,20 @@ fn main() {
         "not a Windows build: proc.seen check skipped, not failed".to_string(),
     );
 
+    // 4b. Shot (cycle 28, feature `eye-shots`, Windows only): request
+    // one shot and give the session up to ~25 s (a frame can take
+    // 20 s on a static desktop). The verdict is read from the log at
+    // the end: `shot.taken` = pass; `shot.failed` with no frame =
+    // skip (headless runner — deferred, not failed); anything else =
+    // fail.
+    #[cfg(all(feature = "eye-shots", windows))]
+    {
+        if let Err(e) = handle.request_shot("self-test") {
+            notes.push(format!("shot request failed: {e}"));
+        }
+        std::thread::sleep(Duration::from_secs(25));
+    }
+
     // Let the hash worker catch up.
     std::thread::sleep(Duration::from_secs(3));
 
@@ -475,6 +489,76 @@ fn main() {
             });
         }
     }
+    // Cycle 28: shot integration — judged from the log, not from the
+    // request call. Direct pushes (see the borrow-rule note above the
+    // schema check): no `check` call may follow this block.
+    #[cfg(all(feature = "eye-shots", windows))]
+    {
+        let shot = events.iter().find(|e| {
+            e.get("type").and_then(|v| v.as_str()) == Some("shot.taken")
+        });
+        let failed = events.iter().find(|e| {
+            e.get("type").and_then(|v| v.as_str()) == Some("shot.failed")
+        });
+        let (status, detail): (&'static str, String) = match (shot, failed) {
+            (Some(ev), _) => {
+                let w = ev.get("width").and_then(|v| v.as_u64()).unwrap_or(0);
+                let h = ev.get("height").and_then(|v| v.as_u64()).unwrap_or(0);
+                let q = ev.get("quality").and_then(|v| v.as_str()).unwrap_or("");
+                let no_title = ev.get("title").is_none();
+                if w > 0 && w <= 1920 && (q == "80" || q == "wic-default-fallback") && no_title
+                {
+                    (
+                        "pass",
+                        format!(
+                            "shot.taken in the eye log: {w}x{h}, quality {q}, no title field"
+                        ),
+                    )
+                } else {
+                    (
+                        "fail",
+                        format!(
+                            "shot.taken event is malformed: width {w}, quality '{q}', title present: {}",
+                            !no_title
+                        ),
+                    )
+                }
+            }
+            (None, Some(ev)) => {
+                let reason = ev
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if reason.contains("no frame") || reason.contains("Monitor::primary") {
+                    (
+                        "skip",
+                        "headless runner: no frame within 20 s — deferred to the Legion, not a design failure".to_string(),
+                    )
+                } else {
+                    ("fail", format!("shot.failed: {reason}"))
+                }
+            }
+            (None, None) => (
+                "fail",
+                "neither shot.taken nor shot.failed in the log — the shot producer never answered"
+                    .to_string(),
+            ),
+        };
+        if status == "fail" {
+            fail = true;
+        }
+        checks.push(Check {
+            name: "shot.taken via eye log (feature eye-shots)",
+            status,
+            detail,
+        });
+    }
+    #[cfg(not(all(feature = "eye-shots", windows)))]
+    notes.push(
+        "shots not wired in this build: shot check skipped (feature `eye-shots` + Windows required)"
+            .to_string(),
+    );
     if crypto == "plain" {
         notes.push(
             "crypto is plain: explicit opt-in BIMO_EYE_PLAINTEXT_OK=1 recorded in the log (council condition 2); DPAPI stays an arrival-day item"

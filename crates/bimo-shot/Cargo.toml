@@ -1,0 +1,31 @@
+[package]
+name = "bimo-shot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "BIMO PC agent — screen shots for the Eye: rate-limited, one frame per request, JPEG quality 80, max width 1920 (Track A Unit 2, shot integration, cycle 28)"
+
+[lib]
+name = "bimo_shot"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bimo-shot-self-test"
+path = "src/bin/self_test.rs"
+
+# The rate limiter is platform-independent (std only) so it unit-tests
+# on a Linux dev machine. Capture + service are Windows-only.
+[target.'cfg(windows)'.dependencies]
+windows-capture = "2.0.1"
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_Com",
+  "Win32_System_Threading",
+  "Win32_System_Variant",
+  "Win32_System_Ole",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_Graphics_Imaging",
+] }
+
+[profile.release]
+strip = true

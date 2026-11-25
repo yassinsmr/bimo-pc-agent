@@ -27,7 +27,21 @@ notify = "7"
 notify-debouncer-full = "0.4" # pairs with notify 7 (its own dependency)
 bimo-wintrack = { path = "../bimo-wintrack" }
 
+# Shot integration (cycle 28): the capture service lives in its own
+# crate so the eye core stays buildable without it. The `eye-shots`
+# feature wires it in (Windows only — the crate is Windows-only);
+# off by default, off on Linux. The council's binding point: the
+# session is persistent, so the measured warm cost holds.
+[features]
+eye-shots = ["dep:bimo-shot"]
+
 [target.'cfg(windows)'.dependencies]
+# Shot integration (cycle 28): the capture service lives in its own
+# crate so the eye core stays buildable without it. The `eye-shots`
+# feature wires it in (Windows only — the crate is Windows-only);
+# off by default, off on Linux. The council's binding point: the
+# session is persistent, so the measured warm cost holds.
+bimo-shot = { path = "../bimo-shot", optional = true }
 windows = { version = "0.62", features = [
   "Win32_Foundation",
   "Win32_System_Diagnostics_ToolHelp",
