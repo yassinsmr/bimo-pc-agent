@@ -222,6 +222,68 @@ fn family_exes(events: &[WinEvent], family: &HashSet<u32>) -> Vec<String> {
     out
 }
 
+/// Is `pid` still alive, via tasklist (cycle 26 helper for the
+/// graceful close below). A tasklist failure assumes alive, so the
+/// forced-kill fallback still runs — never a silent "gone".
+#[cfg(windows)]
+fn pid_alive(pid: u32) -> bool {
+    match std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {}", pid), "/NH"])
+        .output()
+    {
+        Ok(out) => {
+            let text = String::from_utf8_lossy(&out.stdout);
+            !text.contains("No tasks are running")
+        }
+        Err(_) => true,
+    }
+}
+
+/// Gracefully close every process in `family` (cycle 26, 47/1
+/// follow-up): `taskkill /PID <pid>` WITHOUT /F asks each process to
+/// close its own windows (WM_CLOSE), so the hook sees REAL destroys
+/// instead of a kill burst. Wait up to 5 s for all family members to
+/// exit; stragglers get `taskkill /F /PID` and the result is recorded
+/// as "kill-fallback", never hidden. Returns "graceful" only when
+/// every family PID exited without /F.
+///
+/// Why this matters: the old code killed only the spawned child
+/// (`child.kill()` = TerminateProcess on the launcher stub). For calc
+/// the stub exits at once and hands its windows to win32calc.exe, so
+/// the UWP child was NEVER closed by the test — that alone can explain
+/// 47 opens / 1 close. Notepad's windows died by termination, whose
+/// destroys the out-of-context hook can miss. If close_hwnds now rise
+/// toward open_hwnds, the gap was the harness; if 47/1 persists, the
+/// hook itself misses destroys during life.
+#[cfg(windows)]
+fn close_family_gracefully(family: &HashSet<u32>) -> &'static str {
+    let mut pids: Vec<u32> = family.iter().copied().collect();
+    pids.sort_unstable();
+    for pid in &pids {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string()])
+            .output();
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut remaining: Vec<u32> = pids.clone();
+    while Instant::now() < deadline && !remaining.is_empty() {
+        remaining.retain(|pid| pid_alive(*pid));
+        if !remaining.is_empty() {
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+    if remaining.is_empty() {
+        return "graceful";
+    }
+    for pid in &remaining {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/PID", &pid.to_string()])
+            .output();
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    "kill-fallback"
+}
+
 // ---------------------------------------------------------------- Check 1
 fn check_hook_fires() -> i32 {
     let name = "hook-fires";
@@ -274,12 +336,31 @@ fn check_hook_fires() -> i32 {
             }
         })
         .collect();
+    // Cycle 26 (47/1 follow-up): close gracefully instead of killing,
+    // so the hook sees real destroys — and close the WHOLE family,
+    // including the UWP child (win32calc.exe) the old `child.kill()`
+    // never touched. The close mode per app is recorded in the fragment.
+    #[cfg(windows)]
+    let close_modes: Vec<&str> = {
+        let mut modes: Vec<&str> = Vec::new();
+        for (i, (app, ok, _)) in launched.iter().enumerate() {
+            if *ok {
+                modes.push(close_family_gracefully(&families[i]));
+            } else {
+                let _ = app;
+                modes.push("not-launched");
+            }
+        }
+        modes
+    };
+    #[cfg(not(windows))]
+    let close_modes: Vec<&str> = vec!["not-applicable"; launched.len()];
     for mut child in children {
-        let _ = child.kill();
         let _ = child.wait();
     }
-    // Close events may still arrive just after the kill.
-    let tail = drain_until(&rx, &mut log, Instant::now() + Duration::from_secs(1));
+    // Close events may still arrive after the close; drain LONGER (5 s,
+    // was 1 s) so tail destroys are not lost in the shutdown burst.
+    let tail = drain_until(&rx, &mut log, Instant::now() + Duration::from_secs(5));
     let mut all = events;
     all.extend(tail);
     track.stop();
@@ -310,8 +391,8 @@ fn check_hook_fires() -> i32 {
         }
     }
     details.push_str(&format!(
-        ",\"total_events\":{},\"note\":\"SetWinEventHook (out-of-context) on Notepad+calc; counts are per process family (launched exe + its children) because a launcher stub hands its windows to a child (calc.exe -> win32calc.exe); an app that failed to launch is waived with its reason, never counted as a hook failure\"",
-        all.len()
+        ",\"total_events\":{},\"close_mode\":{:?},\"tail_drain_secs\":5,\"note\":\"SetWinEventHook (out-of-context) on Notepad+calc; counts are per process family (launched exe + its children) because a launcher stub hands its windows to a child (calc.exe -> win32calc.exe); an app that failed to launch is waived with its reason, never counted as a hook failure. Cycle 26: apps are closed gracefully (taskkill without /F on the whole family, 5 s wait, /F fallback recorded) with a 5 s tail drain, to test whether the 47/1 calc gap was the kill-burst harness\"",
+        all.len(), close_modes
     ));
     details.push('}');
     if !pass {
