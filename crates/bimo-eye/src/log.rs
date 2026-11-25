@@ -5,6 +5,10 @@
 //! (`serde_json::Value`, BTreeMap). The first line of a fresh file chains
 //! from the constant `GENESIS`. Any tampering breaks the chain at the
 //! first altered line, and `verify_file` reports exactly where.
+//!
+//! Every line also carries `"schema": 1` (spec §3, frozen since cycle
+//! 18, emitted by the writer since the cycle-21 merge). `verify_file`
+//! rejects a line without it, or with an unknown version.
 
 use serde_json::Value;
 use std::fs::{File, OpenOptions};
@@ -12,7 +16,7 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use crate::crypto::{protect_line, unprotect_line, CryptoMode};
-use crate::{hex_sha256, utc_now_rfc3339, EyeEvent};
+use crate::{hex_sha256, utc_now_rfc3339, EyeEvent, LOG_SCHEMA};
 
 /// Previous-hash value for the first line of a fresh log file.
 pub const GENESIS: &str = "GENESIS";
@@ -131,6 +135,9 @@ impl LogWriter {
         let mut obj = ev.to_json();
         obj["seq"] = Value::from(self.seq);
         obj["ts"] = Value::from(utc_now_rfc3339());
+        // Frozen schema (spec §3, cycle-21 merge): every line carries
+        // `"schema": 1`, covered by the hash like every other field.
+        obj["schema"] = Value::from(LOG_SCHEMA);
         let canonical = serde_json::to_string(&obj)
             .map_err(|e| format!("cannot serialise event: {e}"))?;
         let hash = hex_sha256(format!("{}{}", self.prev_hash, canonical).as_bytes());
@@ -207,6 +214,41 @@ pub fn verify_file(path: &Path) -> Result<VerifyReport, String> {
             .map_err(|e| format!("line {}: {e}", idx + 1))?;
         let mut obj: Value = serde_json::from_str(&plain)
             .map_err(|e| format!("line {}: bad json: {e}", idx + 1))?;
+        // Frozen schema (spec §3, cycle-21 merge): a line without
+        // `"schema": 1` is invalid — fail-closed, never silently
+        // accepted. (Logs written before the merge carry no schema;
+        // the writer's resume path archives them with a warning
+        // event instead of losing them silently.)
+        match obj.get("schema").and_then(|s| s.as_u64()) {
+            Some(s) if s == LOG_SCHEMA => {}
+            Some(s) => {
+                return Ok(VerifyReport {
+                    lines,
+                    valid: false,
+                    broken_at: Some(idx + 1),
+                    reason: Some(format!(
+                        "line {}: unknown schema version {} (expected {})",
+                        idx + 1,
+                        s,
+                        LOG_SCHEMA
+                    )),
+                    events,
+                });
+            }
+            None => {
+                return Ok(VerifyReport {
+                    lines,
+                    valid: false,
+                    broken_at: Some(idx + 1),
+                    reason: Some(format!(
+                        "line {}: missing \"schema\" field (expected {})",
+                        idx + 1,
+                        LOG_SCHEMA
+                    )),
+                    events,
+                });
+            }
+        }
         let stored = obj
             .get("hash")
             .and_then(|h| h.as_str())
