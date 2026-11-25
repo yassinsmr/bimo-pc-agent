@@ -251,7 +251,9 @@ pub fn start(cfg: EyeConfig) -> Result<EyeHandle, String> {
     let writer_dropped_hashes = dropped_hashes.clone();
     let win_dropped_events = dropped_events.clone();
     let writer_handle = std::thread::spawn(move || {
+        eprintln!("[diag] writer start");
         writer_loop(writer, rx, hash_tx, writer_dropped_events, writer_dropped_hashes);
+        eprintln!("[diag] writer exit");
     });
 
     let watcher_handle = watch::start_watcher(
