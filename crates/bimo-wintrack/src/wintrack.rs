@@ -9,14 +9,18 @@
 //!   and forwards events through a static channel sender —
 //!   `SetWinEventHook` callbacks carry no user data.
 //! - proc-link: every event carries exe + PID from
-//!   `GetWindowThreadProcessId` + `Toolhelp32Snapshot`.
+//!   `GetWindowThreadProcessId` + `Toolhelp32Snapshot` — except
+//!   `app.close`: the window is already dead when the callback runs,
+//!   so its (pid, exe) comes from a live-window cache filled at
+//!   create/focus time (cycle 21 fix; the old lookup dropped every
+//!   close event).
 //! - no window titles anywhere: this crate never calls
 //!   `GetWindowText`, so Check 4 can prove it from the log alone.
 
 use crate::WinEvent;
 #[cfg(windows)]
 use crate::WinEventKind;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -143,6 +147,12 @@ mod win {
     use windows::Win32::UI::Accessibility::*;
     use windows::Win32::UI::WindowsAndMessaging::*;
 
+    /// Live-window memory (hwnd -> (pid, exe)). See `hook_callback`:
+    /// a destroyed window is already gone when the callback runs, so
+    /// its close can only be named from what create/focus remembered.
+    static WINDOW_CACHE: Mutex<HashMap<u64, (u32, String)>> =
+        Mutex::new(HashMap::new());
+
     pub unsafe extern "system" fn hook_callback(
         _hook: HWINEVENTHOOK,
         event: u32,
@@ -168,14 +178,42 @@ mod win {
         if shared.hook_dead.load(Ordering::SeqCst) {
             return;
         }
-        let mut pid: u32 = 0;
-        unsafe {
-            GetWindowThreadProcessId(hwnd, Some(&mut pid as *mut u32));
-        }
-        if pid == 0 {
-            return;
-        }
-        let exe = exe_for_pid(pid).unwrap_or_else(|| "unknown.exe".to_string());
+        // Resolve (pid, exe). Destroy events are the exception: the
+        // window is already dead when this out-of-context callback
+        // runs, so `GetWindowThreadProcessId` on the dead HWND returns
+        // 0 and the lookup below would drop EVERY close event
+        // (cycle 21: zero `app.close` lines in the spike trial log,
+        // and the merged self-test's close check failed while
+        // open/focus passed). Remember every live window's (pid, exe)
+        // at create/focus time and name the destroy from that memory.
+        let (pid, exe) = if matches!(kind, WinEventKind::AppClose) {
+            match WINDOW_CACHE
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&(hwnd.0 as u64))
+            {
+                Some((pid, exe)) => (pid, exe),
+                None => (0, "unknown.exe".to_string()),
+            }
+        } else {
+            let mut pid: u32 = 0;
+            unsafe {
+                GetWindowThreadProcessId(hwnd, Some(&mut pid as *mut u32));
+            }
+            if pid == 0 {
+                return;
+            }
+            let exe = exe_for_pid(pid).unwrap_or_else(|| "unknown.exe".to_string());
+            let mut cache = WINDOW_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+            // Cap the cache: windows that die without a destroy event
+            // (hook down, process killed hard) must not grow it
+            // without bound.
+            if cache.len() > 10_000 {
+                cache.clear();
+            }
+            cache.insert(hwnd.0 as u64, (pid, exe.clone()));
+            (pid, exe)
+        };
         *shared.last_event.lock().unwrap() = Instant::now();
         let ev = WinEvent {
             kind,
