@@ -65,6 +65,11 @@ pub struct ShotInfo {
     pub wait_ms: u128,
     /// Wall time of the JPEG encode itself.
     pub encode_ms: u128,
+    /// Files pruned by the service after this shot (cycle 31):
+    /// 0 at capture time; the service fills these in.
+    pub pruned: u64,
+    /// Bytes freed by that pruning.
+    pub pruned_bytes: u64,
 }
 
 struct Pending {
@@ -274,6 +279,8 @@ fn run_session(shared: &Arc<SharedState>) -> Result<(), String> {
                     cold,
                     wait_ms,
                     encode_ms,
+                pruned: 0,
+                pruned_bytes: 0,
                 }),
                 Err(e) => Err(e),
             };
