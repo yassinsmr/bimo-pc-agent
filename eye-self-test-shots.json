@@ -47,7 +47,7 @@
       "status": "pass"
     },
     {
-      "detail": "250 lines verified",
+      "detail": "258 lines verified",
       "name": "hash chain valid",
       "status": "pass"
     },
@@ -82,7 +82,7 @@
       "status": "pass"
     },
     {
-      "detail": "250 events checked",
+      "detail": "258 events checked",
       "name": "every log line carries schema 1",
       "status": "pass"
     },
@@ -134,7 +134,7 @@
     {
       "detail": "alert:* request during game mode must emit shot.deferred, not execute",
       "name": "alert shot deferred while gaming (shot.deferred)",
-      "status": "fail"
+      "status": "pass"
     },
     {
       "detail": "deferred alert shot never executed after game mode cleared",
@@ -148,7 +148,7 @@
     }
   ],
   "crypto": "dpapi",
-  "events_total": 250,
+  "events_total": 258,
   "honest_limits": [
     "runner numbers do not prove device performance (flawhunt 11-z)",
     "no real fullscreen game on the runner; game capture is decided on the Legion (second gate)",
@@ -157,8 +157,8 @@
   "notes": [],
   "resources": {
     "cpu_seconds": 0.453125,
-    "elapsed_seconds": 92.1159376,
-    "rss_kb": 16180
+    "elapsed_seconds": 92.123276,
+    "rss_kb": 16116
   },
   "verdict": "fail"
 }
