@@ -7,11 +7,10 @@ license = "MIT"
 
 # Standalone crate on purpose (cycle 16): it builds on its own so the
 # browser can upload it without editing any existing repo file.
-# Integration step (after the spike passes CI + council): the library
-# moves to `crates/bimo-wintrack` and the binary to
-# `apps/eye-window-spike` in the workspace, and the [workspace] table
-# below is removed.
-[workspace]
+# Cycle 24: integrated into the workspace (member of the root
+# Cargo.toml; the [workspace] table is removed — see
+# track-a-unit2-eye-merge-wintrack.md §8). The binary stays in this
+# crate (`eye-window-spike`) as the regression guard.
 
 [lib]
 name = "bimo_wintrack"

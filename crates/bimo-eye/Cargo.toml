@@ -8,11 +8,9 @@ license = "MIT"
 # Standalone crate on purpose (cycle 14): it builds on its own so the
 # browser can upload it without editing any existing repo file.
 # Cycle 21: wired to bimo-wintrack (window events flow into the eye
-# log). Workspace integration is a separate next step: add
-# `crates/bimo-eye` to the workspace members in the root Cargo.toml
-# and remove the [workspace] table below (see
-# track-a-unit2-eye-merge-wintrack.md §8).
-[workspace]
+# log). Cycle 24: integrated into the workspace — `crates/bimo-eye`
+# is a member of the root Cargo.toml and the [workspace] table is
+# removed (see track-a-unit2-eye-merge-wintrack.md §8).
 
 [lib]
 name = "bimo_eye"
