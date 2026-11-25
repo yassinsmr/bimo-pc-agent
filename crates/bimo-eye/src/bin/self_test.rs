@@ -410,6 +410,28 @@ fn main() {
         "heartbeat.json must return with a newer timestamp after the stop file is removed"
             .to_string(),
     );
+    // Cycle-21 merge: every log line must carry schema 1 (spec §3).
+    // NOTE (borrow rule, E0499): the `check` closure borrows `checks`
+    // mutably, so NO `check` call may follow a direct `checks.push`
+    // in the same flow. The file's only direct pushes live in the
+    // `else` branch of the Notepad block below (the last closure use
+    // is inside its exclusive `if` branch) — window checks therefore
+    // live INSIDE that `if` branch, and the schema check lives here,
+    // before any push.
+    let schema_ok = events
+        .iter()
+        .all(|e| e.get("schema").and_then(|v| v.as_u64()) == Some(1));
+    check(
+        "every log line carries schema 1",
+        schema_ok,
+        format!("{} events checked", events.len()),
+    );
+    if !cfg!(windows) {
+        notes.push(
+            "not a Windows build: window-event checks skipped, not failed (hook is Windows-only)"
+                .to_string(),
+        );
+    }
     if cfg!(windows) {
         if notepad_started {
             check(
@@ -422,25 +444,9 @@ fn main() {
                 has_event(&events, "proc.seen", Some("notepad.exe")),
                 "snapshotter must see Notepad while it runs".to_string(),
             );
-        } else {
-            checks.push(Check {
-                name: "proc.seen notepad.exe",
-                status: "skip",
-                detail: "notepad did not start on this runner".to_string(),
-            });
-        }
-    }
-    // Cycle-21 merge: every log line must carry schema 1 (spec §3).
-    let schema_ok = events
-        .iter()
-        .all(|e| e.get("schema").and_then(|v| v.as_u64()) == Some(1));
-    check(
-        "every log line carries schema 1",
-        schema_ok,
-        format!("{} events checked", events.len()),
-    );
-    if cfg!(windows) {
-        if notepad_started {
+            // Cycle-21 merge: window events from the merged hook
+            // (same Notepad run). These calls MUST live in this `if`
+            // branch — see the borrow-rule note above the schema check.
             check(
                 "app.open notepad.exe (window hook)",
                 has_event(&events, "app.open", Some("notepad.exe")),
@@ -458,16 +464,16 @@ fn main() {
             );
         } else {
             checks.push(Check {
+                name: "proc.seen notepad.exe",
+                status: "skip",
+                detail: "notepad did not start on this runner".to_string(),
+            });
+            checks.push(Check {
                 name: "app.open/app.focus/app.close notepad.exe",
                 status: "skip",
                 detail: "notepad did not start on this runner".to_string(),
             });
         }
-    } else {
-        notes.push(
-            "not a Windows build: window-event checks skipped, not failed (hook is Windows-only)"
-                .to_string(),
-        );
     }
     if crypto == "plain" {
         notes.push(
