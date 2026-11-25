@@ -296,10 +296,14 @@ fn process_cpu_100ns() -> u64 {
 /// Cycle 29 (council condition 1): the belt also records the
 /// per-frame warm encode distribution — every warm frame's encode
 /// wall time, the frame index of the max, median and p95 — so the
-/// next outlier can be attributed to a frame. The verdict rule is
-/// UNCHANGED for the fair re-run (answer 5): one warm encode
-/// > 25 ms wall still fails the belt; the merge decision on the
-/// re-run follows the council's answer-5 rules, not this field alone.
+/// next outlier can be attributed to a frame.
+/// Cycle 29 post-merge (council c28, condition 3 — refined stop
+/// rule, adopted in the spec): the belt stops on TWO warm encodes
+/// > 25 ms wall, or on a warm encode median > 15 ms. A single tail
+/// outlier (94 ms in run 1, 37 ms in main run 3, medians 7-8 ms)
+/// no longer stops the belt: the distribution proves it is noise,
+/// not cost. The old single-max trap fired on main run 3 and is
+/// recorded as a breach on main, not passed through.
 #[cfg(windows)]
 fn check_measure() -> (bool, String) {
     use bimo_shot::capture::CaptureSession;
@@ -399,12 +403,23 @@ fn check_measure() -> (bool, String) {
         .collect::<Vec<_>>()
         .join(",");
 
-    let (ok, cost_rule, definition_review, note) = if encode_max_ms > 25 {
+    // Refined stop rule (council c28, condition 3): count the warm
+    // encodes over 25 ms wall — two or more stop the belt; a single
+    // tail outlier does not. A warm median over 15 ms also stops it.
+    let over_25_count = warm_encode_ms.iter().filter(|&&v| v > 25).count();
+    let (ok, cost_rule, definition_review, note) = if over_25_count >= 2 {
         (
             false,
             "stop-escalate",
             false,
-            "immediate stop: a warm encode alone exceeded 25 ms wall",
+            "immediate stop: two warm encodes exceeded 25 ms wall (refined rule, council c28 condition 3)",
+        )
+    } else if encode_median_ms > 15.0 {
+        (
+            false,
+            "stop-escalate",
+            false,
+            "immediate stop: warm encode median above 15 ms wall (refined rule, council c28 condition 3)",
         )
     } else if warm_per_shot_ms <= 5.0 {
         (
