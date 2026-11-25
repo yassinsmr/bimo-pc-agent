@@ -48,6 +48,8 @@ windows = { version = "0.62", features = [
   "Win32_Security_Cryptography",
   "Win32_System_ProcessStatus",
   "Win32_System_Threading",
+    "UI_Notifications",
+    "Data_Xml_Dom",
 ] }
 
 [profile.release]
