@@ -1,1 +1,1 @@
-{"check":"one-frame-stop","status":"pass","ts_unix":1795593900,"details":{"frames_seen":1,"width":1024,"height":768,"first_frame_ms":120,"file":"shotspike-stop.jpg","bytes":337068,"note":"session stopped after exactly one frame; no second frame within 2 s"}}
+{"check":"one-frame-stop","status":"pass","ts_unix":1795594000,"details":{"frames_seen":1,"width":1024,"height":768,"first_frame_ms":127,"file":"shotspike-stop.jpg","bytes":337527,"note":"session stopped after exactly one frame; no second frame within 2 s"}}

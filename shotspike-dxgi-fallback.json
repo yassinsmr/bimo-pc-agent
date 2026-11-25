@@ -1,1 +1,1 @@
-{"check":"dxgi-fallback","status":"pass","ts_unix":1795593957,"details":{"skipped":true,"reason":"primary ok","note":"DXGI fallback not needed — Graphics Capture passed"}}
+{"check":"dxgi-fallback","status":"pass","ts_unix":1795594056,"details":{"skipped":true,"reason":"primary ok","note":"DXGI fallback not needed — Graphics Capture passed"}}
