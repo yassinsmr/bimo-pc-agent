@@ -17,6 +17,9 @@ pub mod crypto;
 pub mod eye;
 pub mod hash_worker;
 pub mod log;
+pub mod notify;
+pub mod reconcile;
+
 /// Shot wiring (feature `eye-shots`, Windows only): the request flag
 /// file + the shot producer thread that owns the `bimo-shot` service.
 /// Without the feature the module does not exist and the eye runs
@@ -98,6 +101,19 @@ pub enum EyeEvent {
     /// A failure is data, never silence (same doctrine as
     /// `hook.recovery_failed`).
     ShotFailed { reason: String },
+    /// Folder reconciliation summary (cycle 31): after every
+    /// periodic re-scan of the watched folders. Proves the
+    /// reconciler ran and what it found.
+    EyeReconciled { scanned: u64, new: u64, changed: u64, gone: u64 },
+    /// Shot files pruned (cycle 31): how many old/over-budget shot
+    /// files were deleted and how many bytes freed.
+    ShotsPruned { removed: u64, freed_bytes: u64 },
+    /// Start-time wipe (cycle 31): prior eye data deleted because
+    /// `eye.wipe` was present at start.
+    EyeWiped { removed_files: u64, freed_bytes: u64 },
+    /// An alert shot request was deferred because game mode is on
+    /// (cycle 31): the request stays pending until gaming ends.
+    ShotDeferred { reason: String },
 }
 
 impl EyeEvent {
@@ -125,6 +141,10 @@ impl EyeEvent {
             EyeEvent::ShotTaken { .. } => "shot.taken",
             EyeEvent::ShotRateLimited { .. } => "shot.rate_limited",
             EyeEvent::ShotFailed { .. } => "shot.failed",
+            EyeEvent::EyeReconciled { .. } => "eye.reconciled",
+            EyeEvent::ShotsPruned { .. } => "shots.pruned",
+            EyeEvent::EyeWiped { .. } => "eye.wiped",
+            EyeEvent::ShotDeferred { .. } => "shot.deferred",
         }
     }
 
@@ -267,6 +287,28 @@ impl EyeEvent {
             EyeEvent::ShotFailed { reason } => json!({
                 "type": "shot.failed",
                 "reason": reason,
+            }),
+            EyeEvent::EyeReconciled { scanned, new, changed, gone } => json!({
+                "type": "eye.reconciled",
+                "scanned": scanned,
+                "new": new,
+                "changed": changed,
+                "gone": gone,
+            }),
+            EyeEvent::ShotsPruned { removed, freed_bytes } => json!({
+                "type": "shots.pruned",
+                "removed": removed,
+                "freed_bytes": freed_bytes,
+            }),
+            EyeEvent::EyeWiped { removed_files, freed_bytes } => json!({
+                "type": "eye.wiped",
+                "removed_files": removed_files,
+                "freed_bytes": freed_bytes,
+            }),
+            EyeEvent::ShotDeferred { reason } => json!({
+                "type": "shot.deferred",
+                "reason": reason,
+                "game_mode": true,
             }),
         }
     }
@@ -469,5 +511,16 @@ mod tests {
         .to_json();
         assert_eq!(v["type"], "shot.rate_limited");
         assert_eq!(v["rejected"], 3);
+    }
+
+    #[test]
+    fn closeout_event_type_strings_are_frozen() {
+        assert_eq!(EyeEvent::EyeReconciled { scanned: 1, new: 0, changed: 0, gone: 0 }.type_str(), "eye.reconciled");
+        assert_eq!(EyeEvent::ShotsPruned { removed: 1, freed_bytes: 2 }.type_str(), "shots.pruned");
+        assert_eq!(EyeEvent::EyeWiped { removed_files: 1, freed_bytes: 2 }.type_str(), "eye.wiped");
+        assert_eq!(EyeEvent::ShotDeferred { reason: "alert:x".into() }.type_str(), "shot.deferred");
+        let v = EyeEvent::ShotDeferred { reason: "alert:x".into() }.to_json();
+        assert_eq!(v["game_mode"], true);
+        assert!(v.get("title").is_none());
     }
 }
