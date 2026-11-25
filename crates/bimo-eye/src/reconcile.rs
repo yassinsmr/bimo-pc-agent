@@ -63,7 +63,7 @@ pub fn scan_dir(dir: &Path) -> HashMap<PathBuf, FileState> {
 pub fn reconcile(
     prev: &HashMap<PathBuf, FileState>,
     cur: &HashMap<PathBuf, FileState>,
-) -> (Vec<EyeEvent>, (u64, u64, u64)) {
+) -> (Vec<EyeEvent>, (u64, u64, u64, u64)) {
     let mut events = Vec::new();
     let mut new = 0u64;
     let mut changed = 0u64;
