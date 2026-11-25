@@ -81,7 +81,7 @@ impl EyeHandle {
         // first so its channel clone drops, then stop the tracker
         // (joins its pump + watchdog), then the other producers.
         eprintln!("[trace] before join win_bridge"); if let Some(h) = self.win_bridge.take() {
-            let _ = h.join(); eprintln!("[trace] after join win_bridge");
+            join_timeout(h, "win_bridge");
         }
         eprintln!("[trace] before WinTrack stop"); if let Some(t) = self.wintrack.take() {
             t.stop(); eprintln!("[trace] after WinTrack stop");
@@ -90,7 +90,7 @@ impl EyeHandle {
         // before the writer so its channel clone drops and the writer
         // can exit once every other producer is gone.
         eprintln!("[trace] before join shot producer"); if let Some(h) = self.shot_producer.take() {
-            let _ = h.join(); eprintln!("[trace] after join shot producer");
+            join_timeout(h, "shot producer");
         }
         eprintln!("[trace] before join remaining handles");
         // Join order is start() order: watcher, snapshot, hash,
@@ -99,8 +99,8 @@ impl EyeHandle {
         for (i, h) in self.handles.drain(..).enumerate() {
             let name = handle_names.get(i).copied().unwrap_or("unknown");
             eprintln!("[trace] before join {}", name);
-            let _ = h.join();
-            eprintln!("[trace] after join {}", name);
+            join_timeout(h, name);
+
         }
         eprintln!("[trace] stop() end");
     }
@@ -486,5 +486,21 @@ mod tests {
         }
         assert_eq!(c.load(Ordering::Relaxed), 0);
         assert!(take_gap_event(&c, "x").is_none());
+    }
+}
+
+/// Join a thread with a 10 s safety net (fallback (ج), cycle 35):
+/// std has no `JoinHandle::join_timeout`, so the join runs on a
+/// helper thread and we wait at most 10 s for it. A thread that
+/// does not exit in time is left running (detached) and stop()
+/// proceeds — this is a safety net only, not a shutdown fix.
+fn join_timeout(handle: JoinHandle<()>, name: &str) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(handle.join());
+    });
+    match rx.recv_timeout(Duration::from_secs(10)) {
+        Ok(_) => eprintln!("[trace] after join {name}"),
+        Err(_) => eprintln!("[trace] join {name} timed out after 10s; proceeding"),
     }
 }
