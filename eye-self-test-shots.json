@@ -27,12 +27,12 @@
       "status": "pass"
     },
     {
-      "detail": "3 file.completed events for setup.exe; the change must be reported",
+      "detail": "4 file.completed events for setup.exe; the change must be reported",
       "name": "second completion observed for setup.exe",
       "status": "pass"
     },
     {
-      "detail": "3 file.hash events for setup.exe; first hash must differ from last",
+      "detail": "4 file.hash events for setup.exe; first hash must differ from last",
       "name": "file re-hashed after later change",
       "status": "pass"
     },
@@ -47,7 +47,7 @@
       "status": "pass"
     },
     {
-      "detail": "202 lines verified",
+      "detail": "250 lines verified",
       "name": "hash chain valid",
       "status": "pass"
     },
@@ -82,8 +82,23 @@
       "status": "pass"
     },
     {
-      "detail": "202 events checked",
+      "detail": "250 events checked",
       "name": "every log line carries schema 1",
+      "status": "pass"
+    },
+    {
+      "detail": "the periodic folder reconciler must emit a summary event",
+      "name": "eye.reconciled present (reconciler thread runs)",
+      "status": "pass"
+    },
+    {
+      "detail": "the start-time wipe must report the seeded old log + shot + heartbeat",
+      "name": "eye.wiped present with the seeded files counted",
+      "status": "pass"
+    },
+    {
+      "detail": "eye.wipe must delete prior shot files",
+      "name": "seeded plain shot file is gone after wipe",
       "status": "pass"
     },
     {
@@ -115,10 +130,25 @@
       "detail": "shot.taken in the eye log: 1024x768, quality 80, no title field",
       "name": "shot.taken via eye log (feature eye-shots)",
       "status": "pass"
+    },
+    {
+      "detail": "alert:* request during game mode must emit shot.deferred, not execute",
+      "name": "alert shot deferred while gaming (shot.deferred)",
+      "status": "fail"
+    },
+    {
+      "detail": "deferred alert shot never executed after game mode cleared",
+      "name": "deferred alert shot executes after gaming",
+      "status": "fail"
+    },
+    {
+      "detail": "toast attempted: ok=false, error='CreateToastNotifier: Element not found. (0x80070490)'",
+      "name": "toast probe recorded for alert shot",
+      "status": "pass"
     }
   ],
   "crypto": "dpapi",
-  "events_total": 202,
+  "events_total": 250,
   "honest_limits": [
     "runner numbers do not prove device performance (flawhunt 11-z)",
     "no real fullscreen game on the runner; game capture is decided on the Legion (second gate)",
@@ -126,9 +156,9 @@
   ],
   "notes": [],
   "resources": {
-    "cpu_seconds": 0.296875,
-    "elapsed_seconds": 64.064609,
-    "rss_kb": 21912
+    "cpu_seconds": 0.453125,
+    "elapsed_seconds": 92.1159376,
+    "rss_kb": 16180
   },
-  "verdict": "pass"
+  "verdict": "fail"
 }
