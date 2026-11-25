@@ -175,6 +175,30 @@ fn spawn_app(exe: &str) -> Result<std::process::Child, String> {
         .map_err(|e| format!("spawn {}: {}", exe, e))
 }
 
+/// Distinct hwnds for a family+kind (cycle 23): event counts alone
+/// cannot settle the calc 47/1 gap — 47 `app.open` events may be
+/// duplicate CREATEs for a few hwnds (UWP frame host) or 47 real
+/// windows whose destroys were missed. Unique-hwnd counts
+/// discriminate: open_hwnds ≈ close_hwnds means a counting
+/// artifact; open_hwnds ≫ close_hwnds means a systematic close
+/// miss and the guard must not trust `app.close` for that family.
+fn count_unique_hwnds_family(
+    events: &[WinEvent],
+    family: &HashSet<u32>,
+    kind: &WinEventKind,
+) -> usize {
+    let mut seen: HashSet<u64> = HashSet::new();
+    for e in events {
+        if std::mem::discriminant(&e.kind) == std::mem::discriminant(kind)
+            && family.contains(&e.pid)
+            && e.hwnd != 0
+        {
+            seen.insert(e.hwnd);
+        }
+    }
+    seen.len()
+}
+
 fn count_kind_family(events: &[WinEvent], family: &HashSet<u32>, kind: &WinEventKind) -> usize {
     events
         .iter()
@@ -272,10 +296,14 @@ fn check_hook_fires() -> i32 {
         let focus = count_kind_family(&all, family, &WinEventKind::AppFocus);
         let open = count_kind_family(&all, family, &WinEventKind::AppOpen);
         let close = count_kind_family(&all, family, &WinEventKind::AppClose);
+        let open_hwnds =
+            count_unique_hwnds_family(&all, family, &WinEventKind::AppOpen);
+        let close_hwnds =
+            count_unique_hwnds_family(&all, family, &WinEventKind::AppClose);
         let exes = family_exes(&all, family);
         details.push_str(&format!(
-            "\"{}\":{{\"launched\":{},\"family_exes\":{:?},\"app.focus\":{},\"app.open\":{},\"app.close\":{}}}",
-            app, ok, exes, focus, open, close
+            "\"{}\":{{\"launched\":{},\"family_exes\":{:?},\"app.focus\":{},\"app.open\":{},\"app.close\":{},\"app.open_hwnds\":{},\"app.close_hwnds\":{}}}",
+            app, ok, exes, focus, open, close, open_hwnds, close_hwnds
         ));
         if *ok && focus == 0 {
             pass = false;

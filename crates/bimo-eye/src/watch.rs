@@ -236,9 +236,22 @@ mod tests {
     }
 
     fn temp_file(name: &str) -> PathBuf {
+        // Unique dir per test call (cycle 23): the old shared
+        // `bimo-eye-watch-test-{pid}` dir + `remove_dir_all` at the
+        // end of each test raced with the other test running in
+        // parallel — a test that finished first deleted the file the
+        // still-running test was about to map, so `metadata` failed
+        // and no `file.completed` was produced. That is the run-29
+        // flake (`modify_data_still_maps_to_completion`, watch.rs:283;
+        // runs 28/30 passed on the same code). Test-only race: the
+        // production `map_event` is unchanged.
+        use std::sync::atomic::AtomicUsize;
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!(
-            "bimo-eye-watch-test-{}",
-            std::process::id()
+            "bimo-eye-watch-test-{}-{}",
+            std::process::id(),
+            n
         ));
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join(name);

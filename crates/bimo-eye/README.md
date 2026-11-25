@@ -66,6 +66,10 @@ creation, NOT one app launch — a single launch may produce many
 / focus 1). Window events are routine: a full queue drops + counts
 them (`log.gap`), never blocking the hook. Every log line carries
 `"schema": 1` (spec §3); the verifier rejects a line without it.
+**Fail-closed:** on Windows a failed hook install FAILS the eye
+start outright — a silently blind eye is worse than a stopped one
+(`eye.rs`: `start_window_producer` propagates the tracker error;
+the self-test catches it on CI before any real run).
 On non-Windows the producer is skipped entirely — no thread, no
 events. What the merge does NOT do: no titles, no screenshots, no
 `app.launch` counting, no workspace integration yet (separate step,
