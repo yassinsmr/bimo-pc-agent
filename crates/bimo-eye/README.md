@@ -1,10 +1,12 @@
 # bimo-eye — the Eye, safe core (Track A Unit 2)
 
 Local event log + file watcher + background hash worker + process
-snapshots + stop file + heartbeat. No window titles, no screenshots,
-no window events in this core — those come with their own spikes
-afterwards (council condition 10: log+files first, windows second,
-screenshots last).
+snapshots + stop file + heartbeat + window events (merged cycle 21
+from the `bimo-wintrack` spike: `app.open` / `app.close` /
+`app.focus` / `hook.recovered` / `hook.recovery_failed`, exe + PID
++ hwnd only). No window titles, no screenshots — those come with
+their own spikes afterwards (council condition 10: log+files first,
+windows second, screenshots last).
 
 ## How it maps to the council conditions (unit 2, 13 conditions)
 
@@ -14,7 +16,7 @@ screenshots last).
 | 2. spike gate before build | passed in cycle 9 (`verdict: pass`) |
 | 3. hash cap | `hash_worker.rs`: async, ~2 GiB cap, off during game mode |
 | 4. `install.detected` low confidence | `eye.rs`: always `"low"`, never a trigger on its own |
-| 5. window titles | NOT in this core — exe + PID only; full titles come with the window spike |
+| 5. window titles | window events merged cycle 21 (exe + PID + hwnd only, never titles — the crate never calls `GetWindowText`); full titles stay out by the frozen naming (§12 of the build spec) |
 | 6. alert screenshots local + notice | NOT in this core — comes with the screenshot spike |
 | 7. watch scope | `agent.start` scope note: v1 watches ONLY the configured folders; anything outside is NOT covered |
 | 8. local encryption + log integrity | `crypto.rs` (DPAPI per line, FAIL-CLOSED: no silent plaintext fallback — refusal or explicit opt-in only) + `log.rs` (hash chain, rotation at 50 MB, 30-day retention) |
@@ -53,6 +55,22 @@ carries them:
   hash. Queue overflows are recorded as `log.gap` events with the
   count and the cause.
 
+## Window events (cycle-21 merge)
+
+`bimo-wintrack` (the council-approved window spike) is wired into
+the eye as a sixth producer: `SetWinEventHook` → bridge thread →
+the same bounded channel and the same hash-chained log. Frozen
+naming (build spec §12): `app.open` counts ONE top-level window
+creation, NOT one app launch — a single launch may produce many
+`app.open` events (the 47-count rule: calc's family logged open 47
+/ focus 1). Window events are routine: a full queue drops + counts
+them (`log.gap`), never blocking the hook. Every log line carries
+`"schema": 1` (spec §3); the verifier rejects a line without it.
+On non-Windows the producer is skipped entirely — no thread, no
+events. What the merge does NOT do: no titles, no screenshots, no
+`app.launch` counting, no workspace integration yet (separate step,
+see `track-a-unit2-eye-merge-wintrack.md` §8).
+
 ## Build
 
 Standalone on purpose (cycle 14): this crate carries its own
@@ -86,10 +104,19 @@ crypto fail-closed branches. Honest limit: a full-queue flood
 (10,000 events) is not reproducible inside the self-test window —
 the overflow mechanism is verified by unit test, not end to end.
 
+New checks added in cycle 21 (window merge): every log line carries
+`"schema": 1`; on Windows, `app.open` / `app.focus` / `app.close`
+for notepad.exe from the merged hook (same Notepad run as the
+`proc.seen` check). Unit tests (`cargo test`) cover the
+`WinEvent` → `EyeEvent` conversion, the frozen type strings, and
+the schema constant.
+
 ## Integration (next step, after this core passes CI + council)
 
 1. Add `crates/bimo-eye` to the workspace members in the root
-   `Cargo.toml` and remove the `[workspace]` table here.
+   `Cargo.toml` and remove the `[workspace]` table here (after the
+   cycle-21 window merge — see `track-a-unit2-eye-merge-wintrack.md`
+   §8 for the root-lock merge table).
 2. Wire it into `apps/bimo-agent` as its own thread behind the
    `--eye-self-test` flag (the flag is already expected by
    `.github/workflows/windows-eye.yml`).
