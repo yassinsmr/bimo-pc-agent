@@ -1,0 +1,149 @@
+# Eye shot UNIT workflow — Track A Unit 2 (the Eye), shot integration.
+# Purpose: prove the shot UNIT (crates/bimo-shot + the eye wiring
+# behind feature `eye-shots`) on REAL Windows, after the spike (PR #9)
+# was merged:
+#   1. Unit tests: the §6 rate limiter (7 in 1 s → 5 allowed / 2
+#      refused; 1/min × 5 → all allowed) + the frozen shot event
+#      names/JSON (no title, no pixels) — on Linux AND Windows.
+#   2. `bimo-shot-self-test --measure`: one real shot through the
+#      `ShotService` (persistent session, JPEG quality 80, max width
+#      1920, dimensions parsed independently from the SOF marker) +
+#      the unit's OWN aggregate measurement (flawhunt 11-w): 10 cold
+#      shots (fresh session each) + 100 warm shots in ONE persistent
+#      session, same decision rules as council c27 (warm ≤ 5 ms/shot
+#      pass; 5–15 pass with definition_review; > 15 fail; one warm
+#      encode > 25 ms wall fails immediately).
+#   3. `bimo-eye-self-test` WITH `--features eye-shots`: the full eye
+#      scenario plus one shot requested through the `shot.request`
+#      flag file — the `shot.taken` event must appear in the encrypted,
+#      hash-chained log and `verify_file` must pass. A no-frame
+#      timeout on a headless runner is a skip (deferred to the Legion),
+#      not a design failure.
+#   4. Titles regression guard: no `"title"` key in any result JSON.
+#
+# Results go to the `spike-results` branch (one branch per workflow
+# family — the eye workflows share it). Publish step: `if: always()`,
+# move-aside pattern (fixed cycle 14), `permissions: contents: write`.
+# The plain `windows-eye` workflow still runs the eye WITHOUT the
+# feature; this workflow is the feature-on path.
+#
+# Lessons reused (cycles 2-7, 14, 19, 26): the merge/publish steps
+# above; YAML `name:` values containing `:` MUST be quoted (cycle 26
+# broke a workflow this way — verify with `yaml.safe_load` locally
+# before upload); a workflow file is uploaded LAST (cycle 25: the
+# workflow must not be pushed before the code it builds).
+
+name: eye-shot-unit
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "crates/bimo-shot/**"
+      - "crates/bimo-eye/**"
+      - ".github/workflows/eye-shot-unit.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+
+permissions:
+  contents: write
+
+jobs:
+  unit:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable + MSVC target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build shot unit + eye with eye-shots for Windows
+        run: |
+          cargo build --release --target x86_64-pc-windows-msvc --locked -p bimo-shot -p bimo-eye --features bimo-eye/eye-shots
+
+      - name: Unit tests (rate limiter + shot events)
+        run: |
+          cargo test --release --target x86_64-pc-windows-msvc --locked -p bimo-shot -p bimo-eye --features bimo-eye/eye-shots
+
+      - name: Shot unit self-test plus aggregate measurement
+        continue-on-error: true
+        timeout-minutes: 15
+        run: .\target\x86_64-pc-windows-msvc\release\bimo-shot-self-test.exe --out shot-unit-results.json --measure
+
+      - name: Eye self-test with shots wired in
+        continue-on-error: true
+        timeout-minutes: 10
+        run: .\target\x86_64-pc-windows-msvc\release\bimo-eye-self-test.exe --out eye-self-test-shots.json
+
+      - name: Titles regression guard
+        shell: bash
+        run: |
+          for f in shot-unit-results.json eye-self-test-shots.json; do
+            if [ -f "$f" ]; then
+              if grep -qi '"title"' "$f"; then
+                echo "FAIL: $f carries a window title"
+                exit 1
+              fi
+              echo "titles guard OK: no window title in $f"
+            else
+              echo "titles guard: $f missing (its step did not produce one)"
+            fi
+          done
+
+      - name: Gate verdict (both JSONs must say pass)
+        # No continue-on-error here on purpose (spike pattern): a
+        # failed check must fail the whole run so a human reads the
+        # JSON. "deferred" (headless runner, no frame) also fails the
+        # run — the JSON says why, and the verdict moves to the Legion.
+        run: |
+          $unit = Get-Content shot-unit-results.json -Raw | ConvertFrom-Json
+          $eye = Get-Content eye-self-test-shots.json -Raw | ConvertFrom-Json
+          Write-Host "shot-unit verdict: $($unit.verdict)"
+          Write-Host "eye-with-shots verdict: $($eye.verdict)"
+          if ($unit.verdict -ne "pass") { Write-Host "::error::shot unit verdict is $($unit.verdict), not pass - read shot-unit-results.json"; exit 1 }
+          if ($eye.verdict -ne "pass") { Write-Host "::error::eye self-test verdict is $($eye.verdict), not pass - read eye-self-test-shots.json"; exit 1 }
+
+      - name: Publish shot unit results to spike-results branch
+        if: always()
+        shell: bash
+        run: |
+          git config user.name "bimo-gate"
+          git config user.email "bimo-gate@local"
+          # The result files are untracked in the working tree, and the
+          # spike-results branch already tracks files of the same names:
+          # checking the branch out would abort ("would be overwritten").
+          # Move results aside first, check out, move them back.
+          # (Fixed cycle 14: runs 45447770210 + 45441211553 failed here.)
+          mkdir -p /tmp/shotunit-publish
+          for f in shot-unit-results.json eye-self-test-shots.json; do
+            [ -f "$f" ] && mv -f "$f" /tmp/shotunit-publish/
+          done
+          git fetch origin spike-results || true
+          if git rev-parse --verify origin/spike-results >/dev/null 2>&1; then
+            git checkout spike-results
+          else
+            git checkout -B spike-results
+          fi
+          mv -f /tmp/shotunit-publish/* . 2>/dev/null || true
+          git add -f shot-unit-results.json eye-self-test-shots.json || true
+          if git diff --cached --quiet; then
+            echo "no shot unit results to commit"
+          else
+            git commit -m "eye shot unit results $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            git push origin spike-results
+          fi
+
+      - name: Upload shot unit results + binaries
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eye-shot-unit
+          path: |
+            shot-unit-results.json
+            eye-self-test-shots.json
+            target/x86_64-pc-windows-msvc/release/bimo-shot-self-test.exe
+            target/x86_64-pc-windows-msvc/release/bimo-eye-self-test.exe
+          retention-days: 30
