@@ -58,9 +58,9 @@ pub fn start_shot_producer(
         let mut service = bimo_shot::service::ShotService::new(data_dir.clone());
         let request_file = data_dir.join(SHOT_REQUEST_FILE);
         let gamemode_file = data_dir.join("eye.gamemode");
-    // Reason of the request currently deferred for game mode, if
-    // any — used to notify exactly once per deferred request.
-    let mut deferred_reason: Option<String> = None;
+      // Reason of the request currently deferred for game mode, if
+      // any — used to notify exactly once per deferred request.
+      let mut deferred_reason: Option<String> = None;
         while !stop_flag.load(Ordering::Relaxed) {
             if request_file.exists() {
                 let reason = std::fs::read_to_string(&request_file)
@@ -71,7 +71,7 @@ pub fn start_shot_producer(
                 } else {
                     reason
                 };
-                // Game mode (cycle 31): an alert shot is DEFERRED, not
+            // Game mode (cycle 31): an alert shot is DEFERRED, not
             // executed — the request file stays put until gaming
             // ends, and the deferral is logged exactly once.
             // On-demand shots still run (Yassin asked for them).
@@ -92,41 +92,41 @@ pub fn start_shot_producer(
                 continue;
             }
             deferred_reason = None;
-            // Delete FIRST: a request is executed at most once,
+                // Delete FIRST: a request is executed at most once,
                 // even if the shot itself fails.
                 let _ = std::fs::remove_file(&request_file);
                 let (ev, notify, pruned) = match service.request_shot(&reason) {
                     bimo_shot::service::ShotOutcome::Taken(info) => (
-                    EyeEvent::ShotTaken {
+                        EyeEvent::ShotTaken {
                             file: info.file,
                             width: info.width,
                             height: info.height,
                             bytes: info.bytes,
-                        quality: info.quality.to_string(),
-                        cold: info.cold,
-                        wait_ms: info.wait_ms as u64,
-                        encode_ms: info.encode_ms as u64,
-                    },
-                    Some(crate::notify::NotifyOutcome::Taken),
-                    (info.pruned, info.pruned_bytes),
-                ),
-                bimo_shot::service::ShotOutcome::RateLimited { rejected_total } => (
+                            quality: info.quality.to_string(),
+                            cold: info.cold,
+                            wait_ms: info.wait_ms as u64,
+                            encode_ms: info.encode_ms as u64,
+                        },
+                        Some(crate::notify::NotifyOutcome::Taken),
+                        (info.pruned, info.pruned_bytes),
+                    ),
+                    bimo_shot::service::ShotOutcome::RateLimited { rejected_total } => (
                         EyeEvent::ShotRateLimited {
                             reason: format!("{reason}: §6 burst 5/10s"),
                             rejected: rejected_total,
                         },
-                    None,
-                    (0, 0),
-                ),
-                bimo_shot::service::ShotOutcome::Failed { reason: err } => (
+                        None,
+                        (0, 0),
+                    ),
+                    bimo_shot::service::ShotOutcome::Failed { reason: err } => (
                         EyeEvent::ShotFailed {
                             reason: format!("{reason}: {err}"),
                         },
-                            Some(crate::notify::NotifyOutcome::Failed),
-                    (0, 0),
-                ),
-            };
-            // Shot events are rare and critical: a blocking send
+                        Some(crate::notify::NotifyOutcome::Failed),
+                        (0, 0),
+                    ),
+                };
+                // Shot events are rare and critical: a blocking send
                 // (not try_send) so they are never dropped as routine.
                 // The writer only exits after all senders drop, and
                 // this thread drops its sender on stop, so the send
@@ -134,34 +134,39 @@ pub fn start_shot_producer(
                 if tx.send(ev).is_err() {
                     break;
                 }
-            if pruned.0 > 0 {
-                let _ = tx.send(EyeEvent::ShotsPruned {
-                    removed: pruned.0,
-                    freed_bytes: pruned.1,
-                });
-            }
-            // Toast (council ruling (c), cycle 31): alert shots
-            // and failures only, never on-demand, never while
-            // gaming. A failed toast never fails the shot.
-            if let Some(outcome) = notify {
-                if crate::notify::should_notify(
-                    &reason,
-                    outcome,
-                    game_mode.load(Ordering::Relaxed),
-                ) {
-                    if let Err(e) = crate::notify::show_toast(
-                        &data_dir,
-                        &crate::notify::toast_text(outcome),
+                if pruned.0 > 0 {
+                    let _ = tx.send(EyeEvent::ShotsPruned {
+                        removed: pruned.0,
+                        freed_bytes: pruned.1,
+                    });
+                }
+                // Toast (council ruling (c), cycle 31): alert shots
+                // and failures only, never on-demand, never while
+                // gaming. A failed toast never fails the shot.
+                if let Some(outcome) = notify {
+                    if crate::notify::should_notify(
+                        &reason,
+                        outcome,
+                        game_mode.load(Ordering::Relaxed),
                     ) {
-                        let _ = tx.send(EyeEvent::Warning {
-                            message: format!("toast failed: {e}"),
-                        });
+                        if let Err(e) = crate::notify::show_toast(
+                            &data_dir,
+                            &crate::notify::toast_text(outcome),
+                        ) {
+                            let _ = tx.send(EyeEvent::Warning {
+                                message: format!("toast failed: {e}"),
+                            });
+                        }
                     }
                 }
             }
-            }
-                
             std::thread::sleep(Duration::from_millis(500));
+        }
+        // Fallback (ج), cycle 35: a deferred alert shot still pending
+        // at stop is dropped, never executed after stop.
+        if let Some(reason) = deferred_reason.take() {
+            eprintln!("[eye] dropping deferred alert shot at stop: {reason}");
+            let _ = std::fs::remove_file(&request_file);
         }
         service.stop();
     })
