@@ -57,6 +57,7 @@ pub fn start_shot_producer(
     std::thread::spawn(move || {
         let mut service = bimo_shot::service::ShotService::new(data_dir.clone());
         let request_file = data_dir.join(SHOT_REQUEST_FILE);
+        let gamemode_file = data_dir.join("eye.gamemode");
     // Reason of the request currently deferred for game mode, if
     // any — used to notify exactly once per deferred request.
     let mut deferred_reason: Option<String> = None;
@@ -74,7 +75,8 @@ pub fn start_shot_producer(
             // executed — the request file stays put until gaming
             // ends, and the deferral is logged exactly once.
             // On-demand shots still run (Yassin asked for them).
-            if reason.starts_with("alert:") && game_mode.load(Ordering::Relaxed) {
+                let gaming = game_mode.load(Ordering::Relaxed) || gamemode_file.exists();
+            if reason.starts_with("alert:") && gaming {
                 if deferred_reason.as_deref() != Some(reason.as_str()) {
                     deferred_reason = Some(reason.clone());
                     if tx
