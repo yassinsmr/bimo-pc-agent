@@ -22,6 +22,11 @@
 # bimo-eye-self-test.exe. The `--eye-self-test` flag on bimo-agent
 # itself comes with the workspace-integration step, after this core
 # passes CI + council.
+# UPDATED (cycle 21, 2026-11-25): the window tracker is merged into
+# the eye (bimo-wintrack path dependency); the workflow now also runs
+# the crate unit tests (conversion + frozen names + schema) on the
+# runner, and the self-test asserts schema 1 on every log line plus
+# app.open/app.focus/app.close for Notepad.
 
 name: windows-eye
 
@@ -30,6 +35,7 @@ on:
   push:
     paths:
       - "crates/bimo-eye/**"
+      - "crates/bimo-wintrack/**"
       - ".github/workflows/windows-eye.yml"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -53,6 +59,12 @@ jobs:
         run: |
           cd crates/bimo-eye
           cargo build --release --target x86_64-pc-windows-msvc --locked
+
+      - name: Unit tests (window conversion + schema)
+        run: |
+          cd crates/bimo-eye
+          cargo test --release --target x86_64-pc-windows-msvc --locked
+                
 
       - name: Eye-core self-test scenario
         # Runs the whole core in a throwaway temp dir and verifies the
