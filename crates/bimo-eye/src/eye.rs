@@ -1,4 +1,4 @@
-//! Orchestration (spec section 4): six producers + one writer.
+//! Orchestration (spec section 4): seven producers + one writer.
 //!
 //! - watcher: raw file events (debounced 2 s) → channel
 //! - snapshotter: process list every N s → channel
@@ -8,6 +8,11 @@
 //!   `bimo-wintrack`, bridged into the same channel (Windows only;
 //!   skipped entirely off Windows). Routine events: dropped + counted
 //!   (`log.gap`) when the bounded queue is full, never blocking.
+//! - shot producer (cycle 28, feature `eye-shots`, Windows only):
+//!   polls the `shot.request` flag file, takes ONE shot per request
+//!   through the `bimo-shot` service (rate limiter + persistent
+//!   session) → channel as `shot.taken` / `shot.rate_limited` /
+//!   `shot.failed`.
 //! - writer (single): owns the JSONL log + hash chain; forwards
 //!   hashable files to the hash worker and emits `install.detected`
 //!   (always low confidence) for `.exe` / `.msi` completions.
@@ -61,6 +66,8 @@ pub struct EyeHandle {
     wintrack: Option<bimo_wintrack::WinTrack>,
     /// Bridge thread: `WinEvent` → `EyeEvent` into the eye channel.
     win_bridge: Option<JoinHandle<()>>,
+    /// Shot producer (feature `eye-shots`, Windows only).
+    shot_producer: Option<JoinHandle<()>>,
 }
 
 impl EyeHandle {
@@ -77,6 +84,12 @@ impl EyeHandle {
         if let Some(t) = self.wintrack.take() {
             t.stop();
         }
+        // Shot producer next (≤500 ms poll + session stop): join it
+        // before the writer so its channel clone drops and the writer
+        // can exit once every other producer is gone.
+        if let Some(h) = self.shot_producer.take() {
+            let _ = h.join();
+        }
         for h in self.handles.drain(..) {
             let _ = h.join();
         }
@@ -84,6 +97,24 @@ impl EyeHandle {
 
     pub fn log_path(&self) -> PathBuf {
         self.log_path.clone()
+    }
+
+    /// Request one shot (writes the `shot.request` flag file; the
+    /// shot producer takes it within ~500 ms). Available with or
+    /// without the `eye-shots` feature — but WITHOUT the feature no
+    /// producer thread exists, so the file just sits there until a
+    /// feature build reads it. The self-test asserts the feature path.
+    pub fn request_shot(&self, reason: &str) -> Result<(), String> {
+        #[cfg(all(feature = "eye-shots", windows))]
+        {
+            crate::shot::request_shot_file(&self.data_dir, reason)
+        }
+        #[cfg(not(all(feature = "eye-shots", windows)))]
+        {
+            let _ = reason;
+            Err("shots are not wired in this build (feature `eye-shots` + Windows required)"
+                .to_string())
+        }
     }
 }
 
@@ -235,6 +266,19 @@ pub fn start(cfg: EyeConfig) -> Result<EyeHandle, String> {
         win_dropped_events,
     )?;
 
+    // Shot producer (feature `eye-shots`, Windows only): polls the
+    // `shot.request` flag file and takes one shot per request through
+    // the `bimo-shot` service (rate limiter + persistent session).
+    // Without the feature the eye runs exactly as before.
+    #[cfg(all(feature = "eye-shots", windows))]
+    let shot_producer = Some(crate::shot::start_shot_producer(
+        tx.clone(),
+        cfg.data_dir.clone(),
+        stop_flag.clone(),
+    ));
+    #[cfg(not(all(feature = "eye-shots", windows)))]
+    let shot_producer: Option<JoinHandle<()>> = None;
+
     // Drop the original sender: the writer exits when every producer
     // thread has ended and dropped its own clone.
     drop(tx);
@@ -252,6 +296,7 @@ pub fn start(cfg: EyeConfig) -> Result<EyeHandle, String> {
         ],
         wintrack,
         win_bridge,
+        shot_producer,
     })
 }
 
