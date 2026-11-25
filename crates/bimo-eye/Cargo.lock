@@ -6,8 +6,17 @@ version = 4
 name = "bimo-eye"
 version = "0.1.0"
 dependencies = [
- "notify",
+ "bimo-wintrack",
+"notify",
  "notify-debouncer-full",
+ "serde_json",
+ "sha2",
+ "windows",
+]
+[[package]]
+name = "bimo-wintrack"
+version = "0.1.0"
+dependencies = [
  "serde_json",
  "sha2",
  "windows",

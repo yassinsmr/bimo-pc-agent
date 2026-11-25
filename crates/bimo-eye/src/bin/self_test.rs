@@ -7,11 +7,14 @@
 //!      `install.detected` (confidence low) + `file.hash`
 //!   3. create `notes.txt` on Desktop → expect `file.completed`
 //!   4. (Windows only) open Notepad for ~8 s → expect `proc.seen`
+//!      plus, since the cycle-21 merge, `app.open` / `app.focus` /
+//!      `app.close` for notepad.exe from the merged window hook
 //!   5. create `eye.stop` → expect `agent.stop` (eye.stop-file) and NO
 //!      events for a file created while stopped; remove it → expect a
 //!      resumed `agent.start`
 //!   6. stop the eye, verify the log: hash chain valid, sequence
-//!      continuous, every expected event present.
+//!      continuous, every expected event present, every line
+//!      carrying `"schema": 1`.
 //!
 //! Writes `eye-self-test.json` (`--out`) and exits 0 on pass, 1 on fail.
 //! Honest limits are recorded in the JSON `notes`, never hidden:
@@ -407,6 +410,28 @@ fn main() {
         "heartbeat.json must return with a newer timestamp after the stop file is removed"
             .to_string(),
     );
+    // Cycle-21 merge: every log line must carry schema 1 (spec §3).
+    // NOTE (borrow rule, E0499): the `check` closure borrows `checks`
+    // mutably, so NO `check` call may follow a direct `checks.push`
+    // in the same flow. The file's only direct pushes live in the
+    // `else` branch of the Notepad block below (the last closure use
+    // is inside its exclusive `if` branch) — window checks therefore
+    // live INSIDE that `if` branch, and the schema check lives here,
+    // before any push.
+    let schema_ok = events
+        .iter()
+        .all(|e| e.get("schema").and_then(|v| v.as_u64()) == Some(1));
+    check(
+        "every log line carries schema 1",
+        schema_ok,
+        format!("{} events checked", events.len()),
+    );
+    if !cfg!(windows) {
+        notes.push(
+            "not a Windows build: window-event checks skipped, not failed (hook is Windows-only)"
+                .to_string(),
+        );
+    }
     if cfg!(windows) {
         if notepad_started {
             check(
@@ -419,9 +444,32 @@ fn main() {
                 has_event(&events, "proc.seen", Some("notepad.exe")),
                 "snapshotter must see Notepad while it runs".to_string(),
             );
+            // Cycle-21 merge: window events from the merged hook
+            // (same Notepad run). These calls MUST live in this `if`
+            // branch — see the borrow-rule note above the schema check.
+            check(
+                "app.open notepad.exe (window hook)",
+                has_event(&events, "app.open", Some("notepad.exe")),
+                "the merged window hook must record Notepad opening".to_string(),
+            );
+            check(
+                "app.focus notepad.exe (window hook)",
+                has_event(&events, "app.focus", Some("notepad.exe")),
+                "the merged window hook must record Notepad taking focus".to_string(),
+            );
+            check(
+                "app.close notepad.exe (window hook)",
+                has_event(&events, "app.close", Some("notepad.exe")),
+                "the merged window hook must record Notepad closing".to_string(),
+            );
         } else {
             checks.push(Check {
                 name: "proc.seen notepad.exe",
+                status: "skip",
+                detail: "notepad did not start on this runner".to_string(),
+            });
+            checks.push(Check {
+                name: "app.open/app.focus/app.close notepad.exe",
                 status: "skip",
                 detail: "notepad did not start on this runner".to_string(),
             });

@@ -7,9 +7,11 @@ license = "MIT"
 
 # Standalone crate on purpose (cycle 14): it builds on its own so the
 # browser can upload it without editing any existing repo file.
-# Integration step (after the block lifts): add `crates/bimo-eye` to the
-# workspace members in the root Cargo.toml and remove the [workspace]
-# table below.
+# Cycle 21: wired to bimo-wintrack (window events flow into the eye
+# log). Workspace integration is a separate next step: add
+# `crates/bimo-eye` to the workspace members in the root Cargo.toml
+# and remove the [workspace] table below (see
+# track-a-unit2-eye-merge-wintrack.md §8).
 [workspace]
 
 [lib]
@@ -25,6 +27,7 @@ serde_json = "1"
 sha2 = "0.10"
 notify = "7"
 notify-debouncer-full = "0.4" # pairs with notify 7 (its own dependency)
+bimo-wintrack = { path = "../bimo-wintrack" }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [

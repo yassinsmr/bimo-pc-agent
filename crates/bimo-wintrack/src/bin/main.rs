@@ -322,6 +322,8 @@ fn check_proc_link() -> i32 {
     // independent re-check (GetWindowThreadProcessId + Toolhelp).
     let deadline = Instant::now() + Duration::from_secs(6);
     let mut verified = 0usize;
+    let mut verified_close = 0usize;
+    let mut unverifiable_close = 0usize;
     let mut bad: Vec<String> = Vec::new();
     let mut total = 0usize;
     loop {
@@ -334,6 +336,22 @@ fn check_proc_link() -> i32 {
                 log.write(&ev);
                 total += 1;
                 if ev.hwnd == 0 || ev.pid == 0 {
+                    // Cache-miss close (cycle 22): a window that died
+                    // before the hook ever saw it open has no cached
+                    // (pid, exe) — the hook honestly reports
+                    // (0, "unknown.exe") with its real hwnd. That is
+                    // shape-checked data, not a bad link: waive it,
+                    // but only while at least one close was fully
+                    // named (guard below) — a cache that names
+                    // nothing must still fail the check.
+                    if matches!(ev.kind, WinEventKind::AppClose)
+                        && ev.pid == 0
+                        && ev.hwnd != 0
+                        && ev.exe == "unknown.exe"
+                    {
+                        unverifiable_close += 1;
+                        continue;
+                    }
                     bad.push(format!("zero hwnd/pid in {:?}", ev.kind.type_str()));
                     continue;
                 }
@@ -343,6 +361,9 @@ fn check_proc_link() -> i32 {
                 }
                 if verify_proc_link(ev.pid, &ev.exe) {
                     verified += 1;
+                    if matches!(ev.kind, WinEventKind::AppClose) {
+                        verified_close += 1;
+                    }
                 } else {
                     bad.push(format!(
                         "link mismatch: pid {} recorded as {} but Toolhelp disagrees",
@@ -357,25 +378,47 @@ fn check_proc_link() -> i32 {
     let _ = child.wait();
     // Close events after the kill: shape-only check (the pid is dead,
     // so re-verification cannot run — the callback resolved the exe
-    // at emission time, with a retry).
+    // at emission time, with a retry). A cache-miss close (0,
+    // "unknown.exe", real hwnd) is waived the same way as in the live
+    // loop — it is honest shape data, not a bad link.
     let tail = drain_until(&rx, &mut log, Instant::now() + Duration::from_secs(1));
     for ev in &tail {
         total += 1;
-        if ev.hwnd == 0 || ev.pid == 0 || ev.exe.is_empty() || ev.exe == "unknown.exe" {
+        if matches!(ev.kind, WinEventKind::AppClose)
+            && ev.pid == 0
+            && ev.hwnd != 0
+            && ev.exe == "unknown.exe"
+        {
+            unverifiable_close += 1;
+        } else if ev.hwnd == 0 || ev.pid == 0 || ev.exe.is_empty() || ev.exe == "unknown.exe" {
             bad.push(format!("bad close event: pid {} exe {:?}", ev.pid, ev.exe));
         } else {
             verified += 1;
+            if matches!(ev.kind, WinEventKind::AppClose) {
+                verified_close += 1;
+            }
         }
     }
     track.stop();
     let details = format!(
-        "{{\"total_events\":{},\"links_verified_live\":{},\"bad\":{},\"note\":\"each live event re-checked against Toolhelp while its process was alive; post-kill close events are shape-checked only\"}}",
+        "{{\"total_events\":{},\"links_verified_live\":{},\"unverifiable_close\":{},\"verified_close\":{},\"bad\":{},\"note\":\"each live event re-checked against Toolhelp while its process was alive; post-kill close events are shape-checked only; a close whose window was never seen open is honestly (0, unknown.exe) with a real hwnd — waived as unverifiable, never counted as verified, and only while at least one close was fully named\"}}",
         total,
         verified,
+        unverifiable_close,
+        verified_close,
         bad.len()
     );
     if total == 0 {
         return fail(name, "0 events — nothing to link (hook blind?)");
+    }
+    if unverifiable_close > 0 && verified_close == 0 {
+        return fail(
+            name,
+            &format!(
+                "{} unverifiable closes but 0 fully-named closes — the window cache names nothing: {}",
+                unverifiable_close, details
+            ),
+        );
     }
     if !bad.is_empty() {
         return fail(name, &format!("{} bad links: {} | {}", bad.len(), bad[0], details));
