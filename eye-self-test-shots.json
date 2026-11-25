@@ -1,0 +1,134 @@
+{
+  "chain_valid": true,
+  "checks": [
+    {
+      "detail": "the eye must record its start",
+      "name": "agent.start present",
+      "status": "pass"
+    },
+    {
+      "detail": "debounced completion of the fake installer",
+      "name": "file.completed setup.exe",
+      "status": "pass"
+    },
+    {
+      "detail": "installer inference must stay low-confidence",
+      "name": "install.detected setup.exe confidence low",
+      "status": "pass"
+    },
+    {
+      "detail": "without opt-in, detection refuses and protect_line errors; with opt-in, plaintext is explicit",
+      "name": "crypto fails closed (simulated DPAPI failure)",
+      "status": "pass"
+    },
+    {
+      "detail": "background hash worker must hash the installer",
+      "name": "file.hash setup.exe",
+      "status": "pass"
+    },
+    {
+      "detail": "3 file.completed events for setup.exe; the change must be reported",
+      "name": "second completion observed for setup.exe",
+      "status": "pass"
+    },
+    {
+      "detail": "3 file.hash events for setup.exe; first hash must differ from last",
+      "name": "file re-hashed after later change",
+      "status": "pass"
+    },
+    {
+      "detail": "debounced completion of a plain file",
+      "name": "file.completed notes.txt",
+      "status": "pass"
+    },
+    {
+      "detail": "at least one heartbeat in ~25 s with a 5 s interval",
+      "name": "eye.heartbeat present",
+      "status": "pass"
+    },
+    {
+      "detail": "211 lines verified",
+      "name": "hash chain valid",
+      "status": "pass"
+    },
+    {
+      "detail": "the stop file must stop the eye and be recorded",
+      "name": "agent.stop eye.stop-file present",
+      "status": "pass"
+    },
+    {
+      "detail": "blocked.txt must not appear while eye.stop exists",
+      "name": "file created while stopped is NOT logged",
+      "status": "pass"
+    },
+    {
+      "detail": "removing eye.stop must resume the eye",
+      "name": "eye resumes after stop file removed",
+      "status": "pass"
+    },
+    {
+      "detail": "heartbeat.json must exist while the eye runs",
+      "name": "heartbeat file present before stop",
+      "status": "pass"
+    },
+    {
+      "detail": "while stopped: heartbeat.json gone and eye.stopped present",
+      "name": "stop leaves an outside-the-log trace",
+      "status": "pass"
+    },
+    {
+      "detail": "heartbeat.json must return with a newer timestamp after the stop file is removed",
+      "name": "heartbeat file fresh again after resume",
+      "status": "pass"
+    },
+    {
+      "detail": "211 events checked",
+      "name": "every log line carries schema 1",
+      "status": "pass"
+    },
+    {
+      "detail": "the snapshotter must report at least one process; a dead snapshotter must not hide behind a missed Notepad",
+      "name": "snapshotter alive (any proc.seen)",
+      "status": "pass"
+    },
+    {
+      "detail": "snapshotter must see Notepad while it runs",
+      "name": "proc.seen notepad.exe",
+      "status": "pass"
+    },
+    {
+      "detail": "the merged window hook must record Notepad opening",
+      "name": "app.open notepad.exe (window hook)",
+      "status": "pass"
+    },
+    {
+      "detail": "the merged window hook must record Notepad taking focus",
+      "name": "app.focus notepad.exe (window hook)",
+      "status": "pass"
+    },
+    {
+      "detail": "the merged window hook must record Notepad closing",
+      "name": "app.close notepad.exe (window hook)",
+      "status": "pass"
+    },
+    {
+      "detail": "shot.taken in the eye log: 1024x768, quality 80, no title field",
+      "name": "shot.taken via eye log (feature eye-shots)",
+      "status": "pass"
+    }
+  ],
+  "crypto": "dpapi",
+  "events_total": 211,
+  "honest_limits": [
+    "runner numbers do not prove device performance (flawhunt 11-z)",
+    "no real fullscreen game on the runner; game capture is decided on the Legion (second gate)",
+    "Defender realtime was off on the runner in the spike; no Defender check runs here"
+  ],
+  "notes": [],
+  "resources": {
+    "cpu_seconds": 0.296875,
+    "elapsed_seconds": 64.0859108,
+    "rss_kb": 21904
+  },
+  "verdict": "pass"
+}
