@@ -47,7 +47,7 @@
       "status": "pass"
     },
     {
-      "detail": "258 lines verified",
+      "detail": "269 lines verified",
       "name": "hash chain valid",
       "status": "pass"
     },
@@ -82,7 +82,7 @@
       "status": "pass"
     },
     {
-      "detail": "258 events checked",
+      "detail": "269 events checked",
       "name": "every log line carries schema 1",
       "status": "pass"
     },
@@ -137,18 +137,18 @@
       "status": "pass"
     },
     {
-      "detail": "deferred alert shot never executed after game mode cleared",
-      "name": "deferred alert shot executes after gaming",
-      "status": "fail"
+      "detail": "deferred alert shot dropped at stop: no extra shot.taken after stop",
+      "name": "deferred alert shot dropped at stop",
+      "status": "pass"
     },
     {
-      "detail": "toast attempted: ok=false, error='CreateToastNotifier: Element not found. (0x80070490)'",
+      "detail": "deferred shot dropped at stop, so no toast was attempted",
       "name": "toast probe recorded for alert shot",
-      "status": "pass"
+      "status": "skip"
     }
   ],
   "crypto": "dpapi",
-  "events_total": 258,
+  "events_total": 269,
   "honest_limits": [
     "runner numbers do not prove device performance (flawhunt 11-z)",
     "no real fullscreen game on the runner; game capture is decided on the Legion (second gate)",
@@ -157,8 +157,8 @@
   "notes": [],
   "resources": {
     "cpu_seconds": 0.453125,
-    "elapsed_seconds": 92.123276,
-    "rss_kb": 16116
+    "elapsed_seconds": 67.1767997,
+    "rss_kb": 22968
   },
-  "verdict": "fail"
+  "verdict": "pass"
 }
