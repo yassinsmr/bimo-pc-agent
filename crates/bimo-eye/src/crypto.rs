@@ -277,6 +277,15 @@ fn dpapi_unprotect(data: &[u8]) -> Result<Vec<u8>, String> {
 mod tests {
     use super::*;
 
+    /// Serialises the env-mutating tests (cycle 22): Rust runs tests
+    /// in parallel threads of ONE process, and `detect_mode` reads
+    /// process-wide env vars. Without this lock the two tests race —
+    /// `fail_closed_without_opt_in` can observe `BIMO_EYE_PLAINTEXT_OK=1`
+    /// set by its sibling mid-test and fail spuriously (windows-eye
+    /// run 26: passed in run 24, failed in run 26, same code).
+    /// The guard is held for the whole test body, including cleanup.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn clear_seam_env() {
         std::env::remove_var("BIMO_EYE_FORCE_CRYPTO_FAIL");
         std::env::remove_var("BIMO_EYE_PLAINTEXT_OK");
@@ -284,6 +293,7 @@ mod tests {
 
     #[test]
     fn fail_closed_without_opt_in() {
+        let _guard = ENV_LOCK.lock().unwrap();
         clear_seam_env();
         std::env::set_var("BIMO_EYE_FORCE_CRYPTO_FAIL", "1");
         // Simulated DPAPI failure, no opt-in: detection must refuse.
@@ -295,6 +305,7 @@ mod tests {
 
     #[test]
     fn opt_in_allows_plain_explicitly() {
+        let _guard = ENV_LOCK.lock().unwrap();
         clear_seam_env();
         std::env::set_var("BIMO_EYE_FORCE_CRYPTO_FAIL", "1");
         std::env::set_var("BIMO_EYE_PLAINTEXT_OK", "1");
