@@ -1,5 +1,5 @@
 {
-  "detections": 0,
   "realtime": false,
-  "available": true
+  "available": true,
+  "detections": 0
 }
