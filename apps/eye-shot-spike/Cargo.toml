@@ -1,0 +1,22 @@
+[package]
+name = "eye-shot-spike"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "eye-shot-spike"
+path = "src/main.rs"
+
+[dependencies]
+# Windows-only capture stack. Kept behind cfg(windows) so the crate still
+# type-checks on a Linux dev machine (stub main exits 2 there).
+# sha2 is already in the root lockfile (bimo-eye 0.10) — the spike uses it
+# for the trial JSONL hash chain only; no new lock entries.
+[target.'cfg(windows)'.dependencies]
+windows-capture = "2.0.1"
+sha2 = "0.10"
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }
