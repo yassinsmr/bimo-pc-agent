@@ -1,1 +1,1 @@
-{"check":"dxgi","status":"pass","ts_unix":1795542787,"details":{"width":1024,"height":768,"elapsed_ms":55,"file":"spike-dxgi.png","bytes":269236,"note":"DXGI Desktop Duplication fallback, one frame"}}
+{"check":"dxgi","status":"pass","ts_unix":1795566031,"details":{"width":1024,"height":768,"elapsed_ms":55,"file":"spike-dxgi.png","bytes":270322,"note":"DXGI Desktop Duplication fallback, one frame"}}

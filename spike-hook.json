@@ -1,1 +1,1 @@
-{"check":"hook","status":"pass","ts_unix":1795542794,"details":{"foreground_events":1,"note":"SetWinEventHook (out-of-context) fired on Notepad open; Defender comparison is in defender-before/after.json"}}
+{"check":"hook","status":"pass","ts_unix":1795566038,"details":{"foreground_events":1,"note":"SetWinEventHook (out-of-context) fired on Notepad open; Defender comparison is in defender-before/after.json"}}
