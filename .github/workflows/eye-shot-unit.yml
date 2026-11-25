@@ -78,6 +78,8 @@ jobs:
         run: .\target\x86_64-pc-windows-msvc\release\bimo-shot-self-test.exe --out shot-unit-results.json --measure
 
       - name: Eye self-test with shots wired in
+        env:
+          RUST_BACKTRACE: 1
         continue-on-error: true
         timeout-minutes: 10
         run: .\target\x86_64-pc-windows-msvc\release\bimo-eye-self-test.exe --out eye-self-test-shots.json
