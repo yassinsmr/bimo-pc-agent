@@ -23,7 +23,7 @@ use crate::WinEventKind;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::thread::JoinHandle;
 #[cfg(windows)]
 use std::time::Duration;
@@ -150,8 +150,10 @@ mod win {
     /// Live-window memory (hwnd -> (pid, exe)). See `hook_callback`:
     /// a destroyed window is already gone when the callback runs, so
     /// its close can only be named from what create/focus remembered.
-    static WINDOW_CACHE: Mutex<HashMap<u64, (u32, String)>> =
-        Mutex::new(HashMap::new());
+    // Cycle 22: `HashMap::new` is not `const`, so a plain `static`
+    // cannot hold it (E0015) — `LazyLock` initialises on first use.
+    static WINDOW_CACHE: LazyLock<Mutex<HashMap<u64, (u32, String)>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
 
     pub unsafe extern "system" fn hook_callback(
         _hook: HWINEVENTHOOK,
