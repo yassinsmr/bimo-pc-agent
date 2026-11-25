@@ -4,6 +4,7 @@ members = [
     "crates/bimo-core",
     "crates/bimo-eye",
     "crates/bimo-island",
+    "crates/bimo-shot",
     "crates/bimo-wintrack",
     "apps/bimo-agent",
     "apps/eye-spike",
