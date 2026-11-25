@@ -157,6 +157,7 @@ pub fn start_shot_producer(
                     }
                 }
             }
+            }
                 
             std::thread::sleep(Duration::from_millis(500));
         }
