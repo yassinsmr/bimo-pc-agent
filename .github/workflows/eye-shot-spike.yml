@@ -1,0 +1,149 @@
+# Eye shot spike workflow — Track A Unit 2 (the Eye), shots.
+# Purpose: prove on REAL Windows, before building the shots into the eye:
+#   1. Graphics Capture from the primary monitor WITHOUT a picker,
+#      one frame saved as JPEG + a `shot.taken` event in a trial JSONL
+#      (same chain rule as the eye core: seq + ts + prev_hash + hash,
+#      `schema: 1`, GENESIS start — plaintext trial only).
+#   2. The capture session stops after exactly ONE frame (no second
+#      frame within 2 s — continuous recording is forbidden by design).
+#   3. One shot costs < 5% process CPU (council condition 11 on Unit 2),
+#      measured with the same definition as the proof gate.
+#   4. DXGI Desktop Duplication fallback, only if Graphics Capture failed.
+# Failure of any core check (1-3) = spike fails = the shots build stops
+# (council condition 2). A no-frame timeout on a headless runner is
+# recorded with `"no_screen": true` in the fragment and the merge verdict
+# is "deferred" — the verdict moves to the Legion, not a design failure.
+# Defender is NOT checked here (suspended by decision: realtime is off
+# on the runner, so the result would be void as evidence).
+#
+# Honest limits, recorded in the JSON: windows-capture 2.0.1 exposes NO
+# JPEG quality setting and NO resize — the file is JPEG at WIC default
+# quality, full monitor width. The design doc's "quality 80, max width
+# 1920" is NOT proven by this spike; quality-80 + downscale belong to
+# the eye unit (BitmapEncoder with ImageQuality), for the council to
+# decide. Capture over a real exclusive-fullscreen game is NOT tested
+# here (second gate, on arrival).
+#
+# Lessons reused (cycles 2-7, 14, 19): permissions: contents: write
+# (else the push fails 403), actions/checkout present in the publish
+# step, if: always() on publish, each check continue-on-error so one
+# failure cannot hide the others, the merge step WITHOUT
+# continue-on-error so a failed check fails the whole run, and the
+# move-aside pattern when publishing to a branch that already tracks
+# files of the same names.
+
+name: eye-shot-spike
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "apps/eye-shot-spike/**"
+      - ".github/workflows/eye-shot-spike.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  spike:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable + MSVC target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build eye-shot-spike for Windows
+        run: cargo build --release --target x86_64-pc-windows-msvc -p eye-shot-spike --locked
+
+      - name: Check 1 — capture works, no picker
+        continue-on-error: true
+        timeout-minutes: 3
+        run: .\target\x86_64-pc-windows-msvc\release\eye-shot-spike.exe --check capture-works
+
+      - name: Check 2 — one frame, then stop
+        continue-on-error: true
+        timeout-minutes: 3
+        run: .\target\x86_64-pc-windows-msvc\release\eye-shot-spike.exe --check one-frame-stop
+
+      - name: Check 3 — shot cost < 5% CPU
+        continue-on-error: true
+        timeout-minutes: 3
+        run: .\target\x86_64-pc-windows-msvc\release\eye-shot-spike.exe --check shot-cost
+
+      - name: Check 4 — DXGI fallback (only if primary failed)
+        continue-on-error: true
+        timeout-minutes: 3
+        run: .\target\x86_64-pc-windows-msvc\release\eye-shot-spike.exe --check dxgi-fallback
+
+      - name: Titles regression guard
+        # The trial JSONL must never carry a full window title (council
+        # condition on the eye unit). It only ever holds shot.taken
+        # events (file + dimensions) — any "title" key fails the run.
+        shell: bash
+        run: |
+          if [ -f shotspike-events.jsonl ]; then
+            if grep -qi '"title"' shotspike-events.jsonl; then
+              echo "FAIL: trial JSONL carries a window title"
+              exit 1
+            fi
+            echo "titles guard OK: no window title in shotspike-events.jsonl"
+          else
+            echo "titles guard: no trial JSONL (capture-works did not produce one)"
+          fi
+
+      - name: Merge shot spike results
+        run: .\target\x86_64-pc-windows-msvc\release\eye-shot-spike.exe --merge
+
+      - name: Publish shot spike results to spike-results branch
+        if: always()
+        shell: bash
+        run: |
+          git config user.name "bimo-gate"
+          git config user.email "bimo-gate@local"
+          # The result files are untracked in the working tree, and the
+          # spike-results branch already tracks files of the same names:
+          # checking the branch out would abort ("would be overwritten").
+          # Move results aside first, check out, move them back.
+          # (Fixed cycle 14: runs 45447770210 + 45441211553 failed here.)
+          mkdir -p /tmp/shotspike-publish
+          for f in shot-spike-results.json shotspike-capture-works.json shotspike-one-frame-stop.json shotspike-shot-cost.json shotspike-dxgi-fallback.json shotspike-events.jsonl shotspike-shot.jpg shotspike-stop.jpg shotspike-cost.jpg shotspike-shot-dxgi.jpg; do
+            [ -f "$f" ] && mv -f "$f" /tmp/shotspike-publish/
+          done
+          git fetch origin spike-results || true
+          if git rev-parse --verify origin/spike-results >/dev/null 2>&1; then
+            git checkout spike-results
+          else
+            git checkout -B spike-results
+          fi
+          mv -f /tmp/shotspike-publish/* . 2>/dev/null || true
+          git add -f shot-spike-results.json shotspike-capture-works.json shotspike-one-frame-stop.json shotspike-shot-cost.json shotspike-dxgi-fallback.json shotspike-events.jsonl || true
+          git add -f shotspike-shot.jpg shotspike-stop.jpg shotspike-cost.jpg shotspike-shot-dxgi.jpg || true
+          if git diff --cached --quiet; then
+            echo "no shot spike results to commit"
+          else
+            git commit -m "eye shot spike results $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            git push origin spike-results
+          fi
+
+      - name: Upload shot spike results + binary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eye-shot-spike
+          path: |
+            shot-spike-results.json
+            shotspike-capture-works.json
+            shotspike-one-frame-stop.json
+            shotspike-shot-cost.json
+            shotspike-dxgi-fallback.json
+            shotspike-events.jsonl
+            shotspike-shot.jpg
+            shotspike-stop.jpg
+            shotspike-cost.jpg
+            shotspike-shot-dxgi.jpg
+            target/x86_64-pc-windows-msvc/release/eye-shot-spike.exe
+          retention-days: 30
