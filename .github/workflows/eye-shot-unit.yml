@@ -11,8 +11,12 @@
 #      the unit's OWN aggregate measurement (flawhunt 11-w): 10 cold
 #      shots (fresh session each) + 100 warm shots in ONE persistent
 #      session, same decision rules as council c27 (warm ≤ 5 ms/shot
-#      pass; 5–15 pass with definition_review; > 15 fail; one warm
-#      encode > 25 ms wall fails immediately).
+#      pass; 5–15 pass with definition_review; > 15 fail) with the
+#      refined stop rule (council c28, condition 3): two warm encodes
+#      > 25 ms wall, or a warm encode median > 15 ms, fails
+#      immediately. A single tail outlier no longer stops the belt —
+#      the per-frame distribution (recorded since c29) proves it is
+#      noise, not cost.
 #   3. `bimo-eye-self-test` WITH `--features eye-shots`: the full eye
 #      scenario plus one shot requested through the `shot.request`
 #      flag file — the `shot.taken` event must appear in the encrypted,
