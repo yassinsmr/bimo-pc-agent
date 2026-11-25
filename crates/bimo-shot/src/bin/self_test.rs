@@ -293,6 +293,13 @@ fn process_cpu_100ns() -> u64 {
 /// Aggregate measurement of the UNIT's capture path (flawhunt 11-w):
 /// 10 cold shots (fresh `CaptureSession` each) + 100 warm shots in
 /// ONE persistent session. Same decision rules as council c27.
+/// Cycle 29 (council condition 1): the belt also records the
+/// per-frame warm encode distribution — every warm frame's encode
+/// wall time, the frame index of the max, median and p95 — so the
+/// next outlier can be attributed to a frame. The verdict rule is
+/// UNCHANGED for the fair re-run (answer 5): one warm encode
+/// > 25 ms wall still fails the belt; the merge decision on the
+/// re-run follows the council's answer-5 rules, not this field alone.
 #[cfg(windows)]
 fn check_measure() -> (bool, String) {
     use bimo_shot::capture::CaptureSession;
@@ -330,16 +337,20 @@ fn check_measure() -> (bool, String) {
     let cold_per_shot_ms = cold_cpu_total_ms / 10.0;
 
     // ---- Warm: 101 frames in ONE persistent session. ----
+    // Frame i=1 is the cold-in-session frame (session setup cost);
+    // warm frames are i=2..=101, reported as warm index 0..=99
+    // (warm index = i - 2). Every warm encode wall time is kept so
+    // the distribution can be published (council condition 1).
     let session = CaptureSession::start_new();
     let mut cpu_after: Vec<u64> = Vec::with_capacity(101);
-    let mut encode_max_ms: u128 = 0;
+    let mut warm_encode_ms: Vec<u128> = Vec::with_capacity(100);
     for i in 1..=101usize {
         let path = data_dir.join(format!("measure-warm-{}.jpg", i));
         match session.request(&path) {
             Ok(info) => {
                 cpu_after.push(process_cpu_100ns());
-                if i > 1 && info.encode_ms > encode_max_ms {
-                    encode_max_ms = info.encode_ms;
+                if i > 1 {
+                    warm_encode_ms.push(info.encode_ms);
                 }
             }
             Err(e) => {
@@ -368,6 +379,25 @@ fn check_measure() -> (bool, String) {
     let warm_total_cpu_ms =
         (cpu_after[100].saturating_sub(cpu_after[0])) as f64 / 10_000.0;
     let warm_per_shot_ms = warm_total_cpu_ms / 100.0;
+
+    // Per-frame warm encode distribution (council condition 1):
+    // max + its warm frame index, median, p95 (95th smallest of 100
+    // = sorted[94]), and the full 100-value list in warm order.
+    let mut sorted_encode = warm_encode_ms.clone();
+    sorted_encode.sort_unstable();
+    let encode_median_ms = (sorted_encode[49] as f64 + sorted_encode[50] as f64) / 2.0;
+    let encode_p95_ms = sorted_encode[94];
+    let (encode_max_ms, encode_max_frame) = warm_encode_ms
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, &v)| v)
+        .map(|(idx, &v)| (v, idx))
+        .unwrap_or((0, 0));
+    let encode_wall_list = warm_encode_ms
+        .iter()
+        .map(|v| v.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
 
     let (ok, cost_rule, definition_review, note) = if encode_max_ms > 25 {
         (
@@ -401,13 +431,17 @@ fn check_measure() -> (bool, String) {
     (
         ok,
         format!(
-            "{{\"rule\":\"council-c27-aggregate (unit path)\",\"frames\":{{\"cold_shots\":10,\"warm_shots\":100}},\"tick_ms\":15.625,\"cold\":{{\"total_cpu_ms\":{:.2},\"per_shot_cpu_ms\":{:.2},\"encode_wall_mean_ms\":{:.2}}},\"warm\":{{\"total_cpu_ms\":{:.2},\"per_shot_cpu_ms\":{:.2},\"encode_max_ms\":{}}},\"cost_rule\":\"{}\",\"definition_review\":{},\"note\":\"{}\"}}",
+            "{{\"rule\":\"council-c27-aggregate (unit path)\",\"frames\":{{\"cold_shots\":10,\"warm_shots\":100}},\"tick_ms\":15.625,\"cold\":{{\"total_cpu_ms\":{:.2},\"per_shot_cpu_ms\":{:.2},\"encode_wall_mean_ms\":{:.2}}},\"warm\":{{\"total_cpu_ms\":{:.2},\"per_shot_cpu_ms\":{:.2},\"encode_max_ms\":{},\"encode_max_frame\":{},\"encode_median_ms\":{:.2},\"encode_p95_ms\":{},\"encode_wall_ms\":[{}]}},\"cost_rule\":\"{}\",\"definition_review\":{},\"note\":\"{}\"}}",
             cold_cpu_total_ms,
             cold_per_shot_ms,
             cold_encode_total as f64 / 10.0,
             warm_total_cpu_ms,
             warm_per_shot_ms,
             encode_max_ms,
+            encode_max_frame,
+            encode_median_ms,
+            encode_p95_ms,
+            encode_wall_list,
             cost_rule,
             definition_review,
             note
