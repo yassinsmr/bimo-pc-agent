@@ -47,7 +47,7 @@
       "status": "pass"
     },
     {
-      "detail": "172 lines verified",
+      "detail": "214 lines verified",
       "name": "hash chain valid",
       "status": "pass"
     },
@@ -82,6 +82,11 @@
       "status": "pass"
     },
     {
+      "detail": "214 events checked",
+      "name": "every log line carries schema 1",
+      "status": "pass"
+    },
+    {
       "detail": "the snapshotter must report at least one process; a dead snapshotter must not hide behind a missed Notepad",
       "name": "snapshotter alive (any proc.seen)",
       "status": "pass"
@@ -90,10 +95,25 @@
       "detail": "snapshotter must see Notepad while it runs",
       "name": "proc.seen notepad.exe",
       "status": "pass"
+    },
+    {
+      "detail": "the merged window hook must record Notepad opening",
+      "name": "app.open notepad.exe (window hook)",
+      "status": "pass"
+    },
+    {
+      "detail": "the merged window hook must record Notepad taking focus",
+      "name": "app.focus notepad.exe (window hook)",
+      "status": "pass"
+    },
+    {
+      "detail": "the merged window hook must record Notepad closing",
+      "name": "app.close notepad.exe (window hook)",
+      "status": "fail"
     }
   ],
   "crypto": "dpapi",
-  "events_total": 172,
+  "events_total": 214,
   "honest_limits": [
     "runner numbers do not prove device performance (flawhunt 11-z)",
     "no real fullscreen game on the runner; game capture is decided on the Legion (second gate)",
@@ -101,9 +121,9 @@
   ],
   "notes": [],
   "resources": {
-    "cpu_seconds": 0.09375,
-    "elapsed_seconds": 39.0532219,
-    "rss_kb": 7900
+    "cpu_seconds": 0.203125,
+    "elapsed_seconds": 39.0638401,
+    "rss_kb": 9036
   },
-  "verdict": "pass"
+  "verdict": "fail"
 }
