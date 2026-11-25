@@ -1,6 +1,8 @@
 # Eye window spike workflow — Track A Unit 2 (the Eye), council condition 2.
+#
 # Purpose: prove on REAL Windows, before building window events into
 # the eye unit (spec track-a-unit2-eye-window-spike.md):
+#
 #   1. SetWinEventHook fires real events (Notepad + calc open/close).
 #   2. Every event links a correct exe + PID (GetWindowThreadProcessId
 #      + Toolhelp32Snapshot).
@@ -10,17 +12,21 @@
 #      eye.full-titles off (the default), 0 full window titles appear
 #      in the trial log — the spike never calls GetWindowText — and
 #      every trial-log line carries schema 1 (council condition 1).
+#
 # Defender before/after is recorded for the record only: it NEVER
 # affects the verdict (council condition 2 — suspended from evidence
 # until a realtime-on scan exists).
+#
 # Failure of any check = spike fails = the window-events build stops
 # (same rule as the eye-spike gate, council condition 2 on Unit 2).
 # The Merge step is the gate (council condition 3): it has NO
 # continue-on-error, so a failed merge fails the whole run. The four
 # check steps keep continue-on-error so one failure cannot hide the
 # others — all fragments still reach the merge.
+#
 # A headless-runner failure is recorded as such in the JSON, not
 # silently treated as a design failure.
+#
 # Runner numbers are tagged in the merged JSON (perf_tag) as never
 # proving device performance (council condition 4).
 #
@@ -28,6 +34,13 @@
 # (crates/bimo-wintrack, own [workspace] table) so it builds without
 # touching the workspace root. The binary is eye-window-spike.exe.
 # Copy to bimo-pc-agent/.github/workflows/eye-window-spike.yml.
+#
+# UPDATED (cycle 24, 2026-11-25): workspace integration — bimo-wintrack
+# is a workspace member now, so the build/test run from the repo root
+# with `-p bimo-wintrack` and the binary lives in the workspace-root
+# target dir (target\...), not crates\bimo-wintrack\target. The root
+# Cargo.toml/Cargo.lock are watched too: a root-lock change re-runs
+# this regression guard (see track-a-unit2-eye-merge-wintrack.md §8).
 #
 # Lessons reused (cycles 2-15): permissions: contents: write (else the
 # push fails 403), actions/checkout present in the publish step,
@@ -44,6 +57,8 @@ on:
     paths:
       - "crates/bimo-wintrack/**"
       - ".github/workflows/eye-window-spike.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
 
 permissions:
   contents: write
@@ -62,22 +77,22 @@ jobs:
 
       - name: Build window spike for Windows
         run: |
-          cd crates/bimo-wintrack
-          cargo build --release --target x86_64-pc-windows-msvc --locked
+          cargo build --release --target x86_64-pc-windows-msvc --locked -p bimo-wintrack
 
       # Council condition 3, mechanical proof on real Windows: the
       # unit tests assert that a failed fragment drops the merge
       # (verdict fail + exit 1), that a Defender rise cannot flip a
       # passing run, and that a schema-less trial-log line fails the
       # merge closed. They run here, on the runner, not only locally.
+
       - name: Unit tests (merge fail-closed + schema + Defender)
         run: |
-          cd crates/bimo-wintrack
-          cargo test --release --target x86_64-pc-windows-msvc --locked
+          cargo test --release --target x86_64-pc-windows-msvc --locked -p bimo-wintrack
 
       # Defender before/after: informational only (council condition
       # 2). These steps can never fail the run; the merge records the
       # counts and ignores them for the verdict.
+
       - name: Defender baseline (before)
         continue-on-error: true
         shell: pwsh
@@ -97,22 +112,22 @@ jobs:
       - name: Check 1 — hook fires (Notepad + calc)
         continue-on-error: true
         timeout-minutes: 3
-        run: .\crates\bimo-wintrack\target\x86_64-pc-windows-msvc\release\eye-window-spike.exe --check hook-fires
+        run: .\target\x86_64-pc-windows-msvc\release\eye-window-spike.exe --check hook-fires
 
       - name: Check 2 — proc-link (exe + PID per event)
         continue-on-error: true
         timeout-minutes: 3
-        run: .\crates\bimo-wintrack\target\x86_64-pc-windows-msvc\release\eye-window-spike.exe --check proc-link
+        run: .\target\x86_64-pc-windows-msvc\release\eye-window-spike.exe --check proc-link
 
       - name: Check 3 — hook resilience (kill + recover < 10 s)
         continue-on-error: true
         timeout-minutes: 3
-        run: .\crates\bimo-wintrack\target\x86_64-pc-windows-msvc\release\eye-window-spike.exe --check hook-resilience
+        run: .\target\x86_64-pc-windows-msvc\release\eye-window-spike.exe --check hook-resilience
 
       - name: Check 4 — titles flag off (0 titles in trial log)
         continue-on-error: true
         timeout-minutes: 3
-        run: .\crates\bimo-wintrack\target\x86_64-pc-windows-msvc\release\eye-window-spike.exe --check titles-flag-off
+        run: .\target\x86_64-pc-windows-msvc\release\eye-window-spike.exe --check titles-flag-off
 
       - name: Defender after
         continue-on-error: true
@@ -134,8 +149,9 @@ jobs:
       # A failed merge (exit 1) fails this job and the run, so a
       # check failure drops the run. Publish/upload below still run
       # (if: always) so the failed evidence is never lost.
+
       - name: Merge window spike results
-        run: .\crates\bimo-wintrack\target\x86_64-pc-windows-msvc\release\eye-window-spike.exe --merge
+        run: .\target\x86_64-pc-windows-msvc\release\eye-window-spike.exe --merge
 
       - name: Publish window spike results to spike-results branch
         if: always()
@@ -181,5 +197,5 @@ jobs:
             winspike-trial.jsonl
             defender-before.json
             defender-after.json
-            crates/bimo-wintrack/target/x86_64-pc-windows-msvc/release/eye-window-spike.exe
+            target/x86_64-pc-windows-msvc/release/eye-window-spike.exe
           retention-days: 30

@@ -1,7 +1,9 @@
 # Windows eye-core workflow — Track A Unit 2 (the Eye), permanent CI.
+#
 # Purpose: on every push touching the eye core, build bimo-eye for real
 # Windows and run its self-test scenario (spec section 8 of
 # track-a-unit2-eye-core-build.md):
+#
 #   - create a fake setup.exe in a temp Downloads folder + a text file
 #   - the events must appear in the local JSONL log, correct and
 #     hash-chained (file.completed, install.detected low, file.hash)
@@ -22,11 +24,19 @@
 # bimo-eye-self-test.exe. The `--eye-self-test` flag on bimo-agent
 # itself comes with the workspace-integration step, after this core
 # passes CI + council.
+#
 # UPDATED (cycle 21, 2026-11-25): the window tracker is merged into
 # the eye (bimo-wintrack path dependency); the workflow now also runs
 # the crate unit tests (conversion + frozen names + schema) on the
 # runner, and the self-test asserts schema 1 on every log line plus
 # app.open/app.focus/app.close for Notepad.
+#
+# UPDATED (cycle 24, 2026-11-25): workspace integration — bimo-eye and
+# bimo-wintrack are workspace members now, so the build/test run from
+# the repo root with `-p bimo-eye` and the binary lives in the
+# workspace-root target dir (target\...), not crates\bimo-eye\target.
+# The per-crate Cargo.lock files are deleted; the root Cargo.lock
+# governs (see track-a-unit2-eye-merge-wintrack.md §8).
 
 name: windows-eye
 
@@ -57,14 +67,11 @@ jobs:
 
       - name: Build eye core for Windows
         run: |
-          cd crates/bimo-eye
-          cargo build --release --target x86_64-pc-windows-msvc --locked
+          cargo build --release --target x86_64-pc-windows-msvc --locked -p bimo-eye
 
       - name: Unit tests (window conversion + schema)
         run: |
-          cd crates/bimo-eye
-          cargo test --release --target x86_64-pc-windows-msvc --locked
-                
+          cargo test --release --target x86_64-pc-windows-msvc --locked -p bimo-eye
 
       - name: Eye-core self-test scenario
         # Runs the whole core in a throwaway temp dir and verifies the
@@ -73,7 +80,7 @@ jobs:
         # and screenshots are not part of this core — a headless failure
         # is recorded as such in the JSON, not silently treated as a
         # design failure.
-        run: .\crates\bimo-eye\target\x86_64-pc-windows-msvc\release\bimo-eye-self-test.exe --out eye-self-test.json
+        run: .\target\x86_64-pc-windows-msvc\release\bimo-eye-self-test.exe --out eye-self-test.json
 
       - name: Publish eye results to spike-results branch
         if: always()
@@ -110,5 +117,5 @@ jobs:
           name: windows-eye
           path: |
             eye-self-test.json
-            crates/bimo-eye/target/x86_64-pc-windows-msvc/release/bimo-eye-self-test.exe
+            target/x86_64-pc-windows-msvc/release/bimo-eye-self-test.exe
           retention-days: 30
