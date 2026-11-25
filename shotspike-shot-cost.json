@@ -1,1 +1,1 @@
-{"check":"shot-cost","status":"fail","ts_unix":1795587001,"details":{"error":"shot cost 32.11% CPU >= 5% council threshold (1024x768, 97ms, 338561 bytes)"}}
+{"check":"shot-cost","status":"fail","ts_unix":1795589792,"details":{"error":"shot cost 27.78% CPU >= 5% council threshold (1024x768, 112ms, 338435 bytes)"}}
