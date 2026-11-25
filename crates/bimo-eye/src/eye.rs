@@ -80,7 +80,7 @@ impl EyeHandle {
         // The bridge exits on the stop flag (≤200 ms poll); join it
         // first so its channel clone drops, then stop the tracker
         // (joins its pump + watchdog), then the other producers.
-        eprintln!("[trace] before join win_bridge"); if let Some(h) = self.win_bridge.take() {
+        if let Some(h) = self.win_bridge.take() {
             join_timeout(h, "win_bridge");
         }
         eprintln!("[trace] before WinTrack stop"); if let Some(t) = self.wintrack.take() {
@@ -89,16 +89,16 @@ impl EyeHandle {
         // Shot producer next (≤500 ms poll + session stop): join it
         // before the writer so its channel clone drops and the writer
         // can exit once every other producer is gone.
-        eprintln!("[trace] before join shot producer"); if let Some(h) = self.shot_producer.take() {
+        if let Some(h) = self.shot_producer.take() {
             join_timeout(h, "shot producer");
         }
-        eprintln!("[trace] before join remaining handles");
+
         // Join order is start() order: watcher, snapshot, hash,
         // reconcile, control, writer.
         let handle_names = ["watcher", "snapshot", "hash", "reconcile", "control", "writer"];
         for (i, h) in self.handles.drain(..).enumerate() {
             let name = handle_names.get(i).copied().unwrap_or("unknown");
-            eprintln!("[trace] before join {}", name);
+
             join_timeout(h, name);
 
         }
@@ -251,9 +251,9 @@ pub fn start(cfg: EyeConfig) -> Result<EyeHandle, String> {
     let writer_dropped_hashes = dropped_hashes.clone();
     let win_dropped_events = dropped_events.clone();
     let writer_handle = std::thread::spawn(move || {
-        eprintln!("[diag] writer start");
+
         writer_loop(writer, rx, hash_tx, writer_dropped_events, writer_dropped_hashes);
-        eprintln!("[diag] writer exit");
+
     });
 
     let watcher_handle = watch::start_watcher(
