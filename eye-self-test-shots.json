@@ -126,9 +126,9 @@
   ],
   "notes": [],
   "resources": {
-    "cpu_seconds": 0.296875,
-    "elapsed_seconds": 64.0838822,
-    "rss_kb": 21884
+    "cpu_seconds": 0.28125,
+    "elapsed_seconds": 64.0854107,
+    "rss_kb": 21804
   },
   "verdict": "pass"
 }
