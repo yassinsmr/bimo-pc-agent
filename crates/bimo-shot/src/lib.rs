@@ -17,6 +17,7 @@
 //! and cost numbers.
 
 pub mod rate_limiter;
+pub mod crypto;
 
 #[cfg(windows)]
 pub mod capture;
