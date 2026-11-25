@@ -17,6 +17,12 @@ pub mod crypto;
 pub mod eye;
 pub mod hash_worker;
 pub mod log;
+/// Shot wiring (feature `eye-shots`, Windows only): the request flag
+/// file + the shot producer thread that owns the `bimo-shot` service.
+/// Without the feature the module does not exist and the eye runs
+/// exactly as before.
+#[cfg(all(feature = "eye-shots", windows))]
+pub mod shot;
 pub mod snapshot;
 pub mod watch;
 
@@ -66,6 +72,32 @@ pub enum EyeEvent {
     /// the 10 s budget (council condition 3: an explicit failure
     /// event, not silence).
     HookRecoveryFailed { after_ms: Option<u64>, reason: Option<String> },
+    /// A screen shot was taken (cycle 28, feature `eye-shots`).
+    /// The event carries the file NAME and cost numbers only — never
+    /// screen content, never a window title. The JPEG itself lives in
+    /// `data_dir/shots/` (local only; no transfer in v1). `quality`
+    /// is `"80"` when the WIC path set it, `"wic-default-fallback"`
+    /// when the encoder fell back to the default. `cold` marks the
+    /// first frame of a (fresh) session — it carries the setup cost.
+    ShotTaken {
+        file: PathBuf,
+        width: u32,
+        height: u32,
+        bytes: u64,
+        quality: String,
+        cold: bool,
+        wait_ms: u64,
+        encode_ms: u64,
+    },
+    /// A shot request was REFUSED by the §6 rate limiter (cycle 28).
+    /// Explicit refusal, never a silent queue — the guard can see
+    /// when something asks for shots too often. `rejected` is the
+    /// running total of refusals from this service.
+    ShotRateLimited { reason: String, rejected: u64 },
+    /// A shot request FAILED (no frame, session error — cycle 28).
+    /// A failure is data, never silence (same doctrine as
+    /// `hook.recovery_failed`).
+    ShotFailed { reason: String },
 }
 
 impl EyeEvent {
@@ -90,6 +122,9 @@ impl EyeEvent {
             EyeEvent::AppFocus { .. } => "app.focus",
             EyeEvent::HookRecovered { .. } => "hook.recovered",
             EyeEvent::HookRecoveryFailed { .. } => "hook.recovery_failed",
+            EyeEvent::ShotTaken { .. } => "shot.taken",
+            EyeEvent::ShotRateLimited { .. } => "shot.rate_limited",
+            EyeEvent::ShotFailed { .. } => "shot.failed",
         }
     }
 
@@ -204,6 +239,35 @@ impl EyeEvent {
                 }
                 v
             }
+            EyeEvent::ShotTaken {
+                file,
+                width,
+                height,
+                bytes,
+                quality,
+                cold,
+                wait_ms,
+                encode_ms,
+            } => json!({
+                "type": "shot.taken",
+                "file": file.display().to_string(),
+                "width": width,
+                "height": height,
+                "bytes": bytes,
+                "quality": quality,
+                "cold": cold,
+                "wait_ms": wait_ms,
+                "encode_ms": encode_ms,
+            }),
+            EyeEvent::ShotRateLimited { reason, rejected } => json!({
+                "type": "shot.rate_limited",
+                "reason": reason,
+                "rejected": rejected,
+            }),
+            EyeEvent::ShotFailed { reason } => json!({
+                "type": "shot.failed",
+                "reason": reason,
+            }),
         }
     }
 }
@@ -337,5 +401,73 @@ mod tests {
     #[test]
     fn log_schema_is_one() {
         assert_eq!(LOG_SCHEMA, 1);
+    }
+
+    #[test]
+    fn shot_event_type_strings_are_frozen() {
+        let taken = EyeEvent::ShotTaken {
+            file: PathBuf::from("shots/shot-000001.jpg"),
+            width: 1920,
+            height: 1080,
+            bytes: 123456,
+            quality: "80".to_string(),
+            cold: false,
+            wait_ms: 300,
+            encode_ms: 11,
+        };
+        assert_eq!(taken.type_str(), "shot.taken");
+        assert_eq!(
+            EyeEvent::ShotRateLimited {
+                reason: "burst".into(),
+                rejected: 2
+            }
+            .type_str(),
+            "shot.rate_limited"
+        );
+        assert_eq!(
+            EyeEvent::ShotFailed {
+                reason: "x".into()
+            }
+            .type_str(),
+            "shot.failed"
+        );
+    }
+
+    #[test]
+    fn shot_taken_json_carries_cost_not_content() {
+        let ev = EyeEvent::ShotTaken {
+            file: PathBuf::from("shots/shot-000001.jpg"),
+            width: 1920,
+            height: 1080,
+            bytes: 123456,
+            quality: "80".to_string(),
+            cold: true,
+            wait_ms: 150,
+            encode_ms: 12,
+        };
+        let v = ev.to_json();
+        assert_eq!(v["type"], "shot.taken");
+        assert_eq!(v["width"], 1920);
+        assert_eq!(v["height"], 1080);
+        assert_eq!(v["bytes"], 123456);
+        assert_eq!(v["quality"], "80");
+        assert_eq!(v["cold"], true);
+        assert_eq!(v["wait_ms"], 150);
+        assert_eq!(v["encode_ms"], 12);
+        // No title, no pixels, no screen content of any kind.
+        assert!(v.get("title").is_none(), "{}", v);
+        assert!(v.get("pixels").is_none(), "{}", v);
+        assert!(v.get("image").is_none(), "{}", v);
+    }
+
+    #[test]
+    fn shot_rate_limited_json_carries_rejected_total() {
+        let v = EyeEvent::ShotRateLimited {
+            reason: "burst 5/10s".into(),
+            rejected: 3,
+        }
+        .to_json();
+        assert_eq!(v["type"], "shot.rate_limited");
+        assert_eq!(v["rejected"], 3);
     }
 }
