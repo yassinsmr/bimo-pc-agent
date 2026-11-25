@@ -236,19 +236,19 @@ fn main() { eprintln!("[trace] main start");
         std::thread::sleep(Duration::from_secs(25));
     }
 
-    eprintln!("[trace] before deferred alert-shot request"); // 4c. Game mode (cycle 31): an alert shot while gaming is
-    // deferred, then runs when gaming ends.
+    eprintln!("[trace] before deferred alert-shot request"); // 4c. Game mode (cycle 31, fallback (ج) cycle 35): an alert
+    // shot while gaming is deferred, and dropped at stop.
     #[cfg(all(feature = "eye-shots", windows))]
-    let deferred_shot_ok = {
+    let deferred_drop = {
         let before = count_type_in_log(&data_dir, "shot.taken");
         let gamemode_file = data_dir.join("eye.gamemode");
         let req_ok = std::fs::write(&gamemode_file, b"game").is_ok()
             && handle.request_shot("alert:self-test-deferred").is_ok();
         std::thread::sleep(Duration::from_secs(3));
-        let _ = std::fs::remove_file(&gamemode_file);
-        std::thread::sleep(Duration::from_secs(25));
-        let after = count_type_in_log(&data_dir, "shot.taken");
-        req_ok && after > before
+        // Gaming stays ON until handle.stop(): the deferred shot must
+        // still be pending then, so stop() drops it (cycle 35).
+        (req_ok, before)
+
     };
     eprintln!("[trace] after deferred alert-shot request"); // Let the hash worker catch up.
     std::thread::sleep(Duration::from_secs(3));
@@ -596,8 +596,8 @@ fn main() { eprintln!("[trace] main start");
             detail,
         });
         // Cycle 31: game-mode deferral — shot.deferred must be in the
-        // log, and the deferred shot must have run after gaming ended
-        // (unless headless: then it fails with no-frame, recorded).
+        // log. Cycle 35 (ج): the deferred shot is dropped at stop
+        // instead of running after gaming ends.
         let deferred_seen = events.iter().any(|e| {
             e.get("type").and_then(|v| v.as_str()) == Some("shot.deferred")
                 && e.get("reason").and_then(|v| v.as_str()) == Some("alert:self-test-deferred")
@@ -610,34 +610,26 @@ fn main() { eprintln!("[trace] main start");
             status: if deferred_seen { "pass" } else { "fail" },
             detail: "alert:* request during game mode must emit shot.deferred, not execute".to_string(),
         });
-        let no_frame_failed = events.iter().any(|e| {
-            e.get("type").and_then(|v| v.as_str()) == Some("shot.failed")
-                && e.get("reason")
-                    .and_then(|v| v.as_str())
-                    .map(|r| r.contains("no frame"))
-                    .unwrap_or(false)
-        });
-        let (def_status, def_detail): (&'static str, String) = if deferred_shot_ok {
+                let (deferred_req_ok, deferred_before) = deferred_drop;
+        let taken_after_stop = count_type_in_log(&data_dir, "shot.taken");
+        let deferred_dropped = deferred_req_ok && taken_after_stop == deferred_before;
+        
+        let (def_status, def_detail): (&'static str, String) = if deferred_dropped {
             (
                 "pass",
-                "deferred alert shot executed after game mode cleared (one more shot.taken)".to_string(),
-            )
-        } else if no_frame_failed {
-            (
-                "skip",
-                "headless runner: deferred shot got no frame — deferred to the Legion".to_string(),
+                "deferred alert shot dropped at stop: no extra shot.taken after stop".to_string(),
             )
         } else {
             (
                 "fail",
-                "deferred alert shot never executed after game mode cleared".to_string(),
+                "deferred alert shot was not dropped at stop".to_string(),
             )
         };
         if def_status == "fail" {
             fail = true;
         }
         checks.push(Check {
-            name: "deferred alert shot executes after gaming",
+            name: "deferred alert shot dropped at stop",
             status: def_status,
             detail: def_detail,
         });
@@ -647,6 +639,9 @@ fn main() { eprintln!("[trace] main start");
             .ok()
             .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
         let (probe_status, probe_detail): (&'static str, String) =
+            if deferred_dropped {
+                    ("skip", "deferred shot dropped at stop, so no toast was attempted".to_string())
+            } else {
             match probe
                 .as_ref()
                 .and_then(|v| v.get("attempted"))
@@ -672,6 +667,7 @@ fn main() { eprintln!("[trace] main start");
                     "fail",
                     "no toast attempt recorded despite an alert shot".to_string(),
                 ),
+            }
             };
         if probe_status == "fail" {
             fail = true;
