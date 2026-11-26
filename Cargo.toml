@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/bimo-core",
     "crates/bimo-eye",
+    "crates/bimo-hand-kill-spike",
     "crates/bimo-island",
     "crates/bimo-shot",
     "crates/bimo-wintrack",
