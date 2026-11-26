@@ -27,6 +27,8 @@ pub type UiHandler = extern "system" fn(*mut std::ffi::c_void, u32, *const u16, 
 
 static CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
 static HANDLER_CALLS: AtomicU64 = AtomicU64::new(0);
+static HANDLER_FIRST_MS: AtomicU64 = AtomicU64::new(0);
+static INSTALL_STARTED_MS: AtomicU64 = AtomicU64::new(0);
 
 // INSTALLMESSAGE_* return values: IDOK = 1 (continue), IDCANCEL = 2.
 extern "system" fn ui_handler(
@@ -35,7 +37,9 @@ extern "system" fn ui_handler(
   _msg: *const u16,
   _extra: *const u16,
 ) -> i32 {
-  HANDLER_CALLS.fetch_add(1, Ordering::SeqCst);
+  if HANDLER_CALLS.fetch_add(1, Ordering::SeqCst) == 0 {
+    HANDLER_FIRST_MS.store(now_ms(), Ordering::SeqCst);
+                          }
   if CANCEL_REQUESTED.load(Ordering::SeqCst) {
     2
   } else {
@@ -61,12 +65,22 @@ fn wide_string(buf: &[u16]) -> String {
   let end = buf.iter().position(|c| *c == 0).unwrap_or(buf.len());
   String::from_utf16_lossy(&buf[..end])
 }
+/// Milliseconds since the Unix epoch (probe: first UI-handler call time).
+pub fn now_ms() -> u64 {
+  std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+  .map(|d| d.as_millis() as u64)
+  .unwrap_or(0)
+}
 
 pub struct CancelOutcome {
   pub return_code: u32,
   pub cancel_ms: u64,
   pub total_ms: u64,
   pub handler_calls: u64,
+  pub handler_first_ms: u64,
+  pub internal_ui_prev: u32,
+  pub external_ui_prev_non_null: bool,
   pub cancelled: bool,
 }
 
@@ -102,7 +116,7 @@ pub fn install_with_cancel(msi_path: &str, cancel_after_ms: u64) -> CancelOutcom
     return_code: rc,
     cancel_ms: total.saturating_sub(cancel_after_ms),
     total_ms: total,
-    handler_calls: HANDLER_CALLS.load(Ordering::SeqCst),
+    handler_calls: HANDLER_CALLS.load(Ordering::SeqCst), handler_first_ms: 0, internal_ui_prev: 0, external_ui_prev_non_null: false,
     cancelled: CANCEL_REQUESTED.load(Ordering::SeqCst),
   }
 }
@@ -239,6 +253,8 @@ pub fn install_product(msi_path: &str) -> u32 {
 pub fn install_with_external_cancel(msi_path: &str, cancel: Arc<AtomicBool>) -> CancelOutcome {
     CANCEL_REQUESTED.store(false, Ordering::SeqCst);
     HANDLER_CALLS.store(0, Ordering::SeqCst);
+  HANDLER_FIRST_MS.store(0, Ordering::SeqCst);
+  INSTALL_STARTED_MS.store(now_ms(), Ordering::SeqCst);
     let cancel_at: Arc<std::sync::Mutex<Option<Instant>>> = Arc::new(std::sync::Mutex::new(None));
     let done = Arc::new(AtomicBool::new(false));
     let watcher_cancel = Arc::clone(&cancel);
@@ -256,8 +272,8 @@ pub fn install_with_external_cancel(msi_path: &str, cancel: Arc<AtomicBool>) -> 
         }
     });
     unsafe {
-        MsiSetInternalUI(2, std::ptr::null_mut());
-        MsiSetExternalUIW(Some(ui_handler), 0xFFFF_FFFF, std::ptr::null_mut());
+        let internal_ui_prev = MsiSetInternalUI(2, std::ptr::null_mut());
+        let external_ui_prev = MsiSetExternalUIW(Some(ui_handler), 0xFFFF_FFFF, std::ptr::null_mut());
     }
     let start = Instant::now();
     let pkg = wide(msi_path);
@@ -279,7 +295,7 @@ pub fn install_with_external_cancel(msi_path: &str, cancel: Arc<AtomicBool>) -> 
         return_code: rc,
         cancel_ms,
         total_ms: start.elapsed().as_millis() as u64,
-        handler_calls: HANDLER_CALLS.load(Ordering::SeqCst),
+        handler_calls: HANDLER_CALLS.load(Ordering::SeqCst), handler_first_ms: HANDLER_FIRST_MS.load(Ordering::SeqCst).saturating_sub(INSTALL_STARTED_MS.load(Ordering::SeqCst)), internal_ui_prev, external_ui_prev_non_null: !external_ui_prev.is_null(),
         cancelled,
     }
 }
