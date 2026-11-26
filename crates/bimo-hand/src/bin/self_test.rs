@@ -121,23 +121,37 @@ fn queue_state(data_dir: &Path, id: &str) -> Option<(String, Option<String>)> {
 }
 
 fn download(url: &str, out: &Path) -> bool {
-    let curl = ProcCommand::new("curl.exe")
-        .args(["-L", "--fail", "-o", &out.to_string_lossy(), url])
-        .output();
-    if let Ok(o) = curl {
-        if o.status.success() && out.exists() && file_size(out) > 0 {
+    // Retry: egress to one host can fail transiently while another
+    // works (cycle 41, run 11: the Firefox bouncer failed once while
+    // VideoLAN downloaded fine on the same runner). Three attempts,
+    // 5 s apart, curl then PowerShell each time. A download that fails
+    // every attempt is reported download-failed (inconclusive), never
+    // a pass.
+    for attempt in 1..=3 {
+        let curl = ProcCommand::new("curl.exe")
+            .args(["-L", "--fail", "-o", &out.to_string_lossy(), url])
+            .output();
+        if let Ok(o) = curl {
+            if o.status.success() && out.exists() && file_size(out) > 0 {
+                return true;
+            }
+        }
+        let ps = format!(
+            "Invoke-WebRequest -Uri '{}' -OutFile '{}'",
+            url,
+            out.to_string_lossy()
+        );
+        let r = ProcCommand::new("powershell.exe")
+            .args(["-NoProfile", "-Command", &ps])
+            .output();
+        if matches!(r, Ok(o) if o.status.success() && out.exists() && file_size(out) > 0) {
             return true;
         }
+        if attempt < 3 {
+            std::thread::sleep(Duration::from_secs(5));
+        }
     }
-    let ps = format!(
-        "Invoke-WebRequest -Uri '{}' -OutFile '{}'",
-        url,
-        out.to_string_lossy()
-    );
-    let r = ProcCommand::new("powershell.exe")
-        .args(["-NoProfile", "-Command", &ps])
-        .output();
-    matches!(r, Ok(o) if o.status.success()) && out.exists() && file_size(out) > 0
+    false
 }
 
 fn gen_1gb(path: &Path) -> std::io::Result<()> {
@@ -614,6 +628,10 @@ fn proof_8_10b(ctx: &mut Ctx) -> Proof {
     if !ctx.supervisor_started {
         return fail(json!({"reason": "supervisor did not start"}));
     }
+    // Start from a clean stop state: a hand.stop left by an earlier
+    // proof aborts this transfer on launch (run 11: transfer-ok-1
+    // never ran, done=false, no destination file).
+    let _ = ctx.ctl.clear_stop();
     let src = match &ctx.transfer_source {
         Some(s) => s.clone(),
         None => return fail(json!({"reason": "no transfer source from 8.2"})),
@@ -769,8 +787,12 @@ fn proof_8_2b(ctx: &mut Ctx) -> Proof {
         return inconclusive(json!({"reason": "no-started-pid"}));
     }
     // Spawn the orphan grandchild via Win32_Process.Create (WMI/CIM).
-    let orphan_src = ctx.work_dir.join("orphan-src.bin");
-    let _ = std::fs::copy(&src, &orphan_src);
+    // The orphan slow-copies the same 1 GB source the transfer reads
+    // (read-only sharing): copying it first cost ~as long as the
+    // transfer itself, so in run 11 the transfer finished ("done")
+    // before hand.stop was written, no abort ever ran, and the orphan
+    // survived. No pre-copy: the stop now lands while the transfer runs.
+    let orphan_src = src.clone();
     let orphan_dst = ctx.work_dir.join("orphan-dst.bin");
     let ps = format!("Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{{CommandLine='\"{}\" --slow-copy \"{}\" \"{}\"'}}", exe_str, orphan_src.to_string_lossy(), orphan_dst.to_string_lossy());
     let ps_out = std::process::Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-Command", &ps]).output();
@@ -808,9 +830,14 @@ fn proof_8_2b(ctx: &mut Ctx) -> Proof {
     let result = wait_exec_result(&ctx.data_dir, "transfer-orphan", Duration::from_secs(120));
     let orphan_dead = !bimo_hand::win32::alive(orphan_pid);
     let orphan_gone_by_window = bimo_hand::win32::processes_by_exe_and_window(&exe_str, window_start, std::time::SystemTime::now()).is_empty();
+    // Clear the stop we wrote: a leftover hand.stop aborts the next
+    // command on launch (run 11: it killed transfer-ok-1 in 8.10b and
+    // cancelled the 8.1 phase-B install at once, ui_calls 0).
+    let _ = ctx.ctl.clear_stop();
     let measured = json!({
         "root_pid": root_pid, "orphan_pid": orphan_pid, "orphan_ppid": orphan_ppid,
         "orphan_ppid_exe": orphan_ppid_exe, "orphan_parent_is_wmiprvse": orphan_ppid_exe.to_ascii_lowercase().contains("wmiprvse"),
+        "orphan_exe": bimo_hand::win32::exe_path(orphan_pid).unwrap_or_default(),
         "orphan_in_ppid_tree": orphan_in_tree,
         "ppid_enumeration_does_not_cover_wmi_com": true,
         "killed_by": "alternative-naming (creation-time window + exe path)",
