@@ -380,6 +380,9 @@ mod tests {
         let mut q = Queue::open(&dir).unwrap();
         let mut a = sample("a");
         let mut b = sample("b");
+        // Distinct args => distinct dedup key (identical args would be Duplicate).
+        b.args = json!({"url": "https://example.invalid/g.bin", "size_bytes": 456});
+        b.dedup_key = dedup_key_for("download", &b.args);
         assert_eq!(q.append(&mut a).unwrap(), EnqueueOutcome::Enqueued);
         assert_eq!(q.append(&mut b).unwrap(), EnqueueOutcome::Enqueued);
         let cmds = q.read_all().unwrap();
