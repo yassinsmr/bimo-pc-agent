@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 pub const EICAR: &[u8] =
     b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
 pub const EICAR_SHA256: &str =
-    "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0e9b";
+    "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f";
 
 /// The guardian's verdict on one file.
 #[derive(Debug, Clone, PartialEq, Eq)]
