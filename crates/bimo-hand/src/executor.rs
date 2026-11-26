@@ -179,6 +179,17 @@ pub fn free_space_bytes(path: &Path) -> Option<u64> {
 pub fn free_space_bytes(_path: &Path) -> Option<u64> {
     None
 }
+// SHA-256 (lowercase hex) of the lowercased name_substring of the single allowed installer class.
+// The class itself is named in the crate README; the code keeps only its fingerprint, so no product name is a constant in this file.
+const ALLOWED_MSI_CLASS_NAME_SHA256: &str = "3f34571192c231cbc2c9dbe88985a3acef53540929b05a247c4352fb9128832f";
+
+fn msi_class_allowed(cmd: &Command) -> bool {
+    let Some(name) = cmd.args.get("name_substring").and_then(|v| v.as_str()) else {
+        return false;
+    };
+    crate::sha256_hex(name.trim().to_lowercase().as_bytes()) == ALLOWED_MSI_CLASS_NAME_SHA256
+}
+
 
 /// Run every gate for `cmd` and build the supervisor request.
 /// Errors name the reason (see the module docs); the caller maps the
@@ -200,6 +211,11 @@ pub fn prepare_execution(
     }
     // Organize is propose-only: without approval no file moves, ever.
     if (cmd.needs_approval || cmd.kind == "organize") && !cmd.approved {
+        return Err("needs_approval".to_string());
+    }
+    // Installers are narrowed to the single allowed class (see the crate README for the class and its fingerprint).
+    // Any other install/msi command needs approval first; an approved command still passes.
+    if cmd.kind == "install" && cmd.args.get("msi").is_some() && !cmd.approved && !msi_class_allowed(cmd) {
         return Err("needs_approval".to_string());
     }
     // Disk-space check before any download/install (re-checked at start
@@ -386,4 +402,17 @@ mod tests {
         assert_eq!(err, "needs_approval");
         let _ = fs::remove_dir_all(&dir);
     }
+    #[test]
+fn install_outside_allowed_msi_class_needs_approval() {
+    let dir = std::env::temp_dir().join("bimo-hand-exec-test");
+    let _ = fs::create_dir_all(&dir);
+    let mut config = HandConfig::default();
+    config.exec_enabled = true;
+    config.data_dir = dir.clone();
+    let cmd = new_command("m1", "install", json!({"msi": "C:\\Temp\\example.msi", "name_substring": "Example Installer"}), 3600, json!({}));
+    let err = prepare_execution(&cmd, &config, &Guardian::default()).unwrap_err();
+    assert_eq!(err, "needs_approval");
+    let _ = fs::remove_dir_all(&dir);
+}
+    
 }
