@@ -989,9 +989,9 @@ fn msi_request(ctx: &Ctx, id: &str, msi: &str, uninstall: bool, install_dir: &st
 
 /// 8.1 ELEVATED MSI KILL — RED LINE.
 fn proof_8_1(ctx: &mut Ctx) -> Proof {
-    // v2 (cycle 41, section 8.1, corrected): proof on two installers --
-    // VLC 3.0.20 win64 MSI (VideoLAN, official) and Firefox MSI win64
-    // multi-locale (Mozilla, official). Phase A per installer: full
+// v2 (cycle 42): proof on VLC only -- Firefox was removed because
+// it is pre-installed in the runner image (runs 14 and 19: the target
+// dir already contained firefox.exe before install). Phase A: full
     // install via MsiInstallProduct, then removal via MsiConfigureProductW
     // (INSTALLSTATE_ABSENT) and verification that the product is gone.
     // Phase B: a fresh install cancelled via MsiInstallProduct + an
@@ -999,21 +999,20 @@ fn proof_8_1(ctx: &mut Ctx) -> Proof {
     // mutex free, service idle, no leftovers, no attributed survivor).
     // Download failure is inconclusive, never a pass. An inconclusive
     // 8.1 blocks merge and final reliance (v2 condition 2).
-    let installers: [(&str, &str, &str, &str, &str); 2] = [
+    let installers: [(&str, &str, &str, &str, &str); 1] = [
         ("vlc", "VLC media player",
          VLC_PRIMARY,
          VLC_FALLBACK,
          r"C:\Program Files\VideoLAN\VLC"),
-        ("firefox", "Mozilla Firefox",
-         "https://download.mozilla.org/?product=firefox-msi-latest-ssl&os=win64&lang=en-US",
-         "",
-         r"C:\Program Files\Mozilla Firefox"),
     ];
     let mut results: Vec<Value> = Vec::new();
     let mut any_fail = false;
     let mut any_inconclusive = false;
     let mut msi_cancel_ms: u64 = 0;
     let mut ui_calls_total: u64 = 0;
+    let mut handler_first_ms_total: u64 = 0;
+    let mut internal_ui_prev_total: u32 = 0;
+    let mut external_ui_prev_non_null_total: bool = false;
     for (key, name_sub, url1, url2, target_dir) in installers {
         let msi_path = ctx.work_dir.join(format!("{key}-proof81.msi"));
         let mut downloaded = download(url1, &msi_path);
@@ -1059,6 +1058,9 @@ fn proof_8_1(ctx: &mut Ctx) -> Proof {
         let mut stop_ms_b: u64 = 0;
         let mut return_code_b: Option<u32> = None;
         let mut ui_calls_b: u64 = 0;
+        let mut handler_first_ms_b: u64 = 0;
+        let mut internal_ui_prev_b: u32 = 0;
+        let mut external_ui_prev_non_null_b: bool = false;
         let mut trigger_b = "hand.stop";
         let mut status_b = String::new();
         let mut tree_dead_b = false;
@@ -1085,12 +1087,16 @@ fn proof_8_1(ctx: &mut Ctx) -> Proof {
                     if let Some(ab) = r.get("abort") {
                         cancel_ms_b = ab.get("forced_ms").and_then(|v| v.as_u64()).unwrap_or(0);
                         survivors_b = ab.get("survivors").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                        ui_calls_b = ab.get("ui_calls").and_then(|v| v.as_u64()).unwrap_or(0);
+                        handler_first_ms_b = ab.get("handler_first_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+                        internal_ui_prev_b = ab.get("internal_ui_prev").and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(0);
+                        external_ui_prev_non_null_b = ab.get("external_ui_prev_non_null").and_then(|v| v.as_bool()).unwrap_or(false);
                     }
                 } else {
                     status_b = "no-result".to_string();
                 }
             } else {
-                // Firefox phase B goes through kill::abort directly, with
+                // Direct phase B goes through kill::abort directly, with
                 // a TTL trigger (v2 condition 4 evidence: an MSI stop via
                 // a trigger other than hand.stop). The install runs in a
                 // dedicated thread; this thread is the monitor.
@@ -1117,6 +1123,9 @@ fn proof_8_1(ctx: &mut Ctx) -> Proof {
                 survivors_b = outcome.survivors.clone();
                 ui_calls_b = outcome.ui_calls;
                 status_b = outcome.status.clone();
+                handler_first_ms_b = outcome.handler_first_ms;
+                internal_ui_prev_b = outcome.internal_ui_prev;
+                external_ui_prev_non_null_b = outcome.external_ui_prev_non_null;
                 // The install thread's CancelOutcome is consumed by abort;
                 // handler_calls are recorded in the outcome note.
             }
@@ -1147,6 +1156,9 @@ fn proof_8_1(ctx: &mut Ctx) -> Proof {
         if key == "vlc" {
             msi_cancel_ms = cancel_ms_b;
             ctx.stop_install_ms = Some(stop_ms_b);
+            handler_first_ms_total = handler_first_ms_b;
+            internal_ui_prev_total = internal_ui_prev_b;
+            external_ui_prev_non_null_total = external_ui_prev_non_null_b;
         }
         ui_calls_total += ui_calls_b;
         // Cleanup: remove any partial install left behind.
@@ -1158,7 +1170,7 @@ fn proof_8_1(ctx: &mut Ctx) -> Proof {
             "installer": key, "name_substring": name_sub, "sha256": sha256,
             "product_code": code_a, "product_version": version_a,
             "phase_a": {"status": phase_a_status, "return_code": rc_a, "install_duration_ms": install_duration_ms, "uninstall_return_code": uninstall_rc, "product_absent_after_removal": absent_after_a, "target_folder_empty_after_removal": leftovers_a, "pre_command_state": pre_a},
-            "phase_b": {"status": phase_b_status, "trigger": trigger_b, "kill_ms_after_start": kill_ms, "stop_ms": stop_ms_b, "cancel_ms": cancel_ms_b, "forced_ms": cancel_ms_b, "return_code": return_code_b, "ui_calls": ui_calls_b, "result_status": status_b, "tree_dead": tree_dead_b, "survivors": survivors_b, "product_absent": absent_b, "mutex_free": mutex_free_b, "service_idle": service_idle_b, "target_folder_empty": leftovers_b},
+            "phase_b": {"status": phase_b_status, "trigger": trigger_b, "kill_ms_after_start": kill_ms, "stop_ms": stop_ms_b, "cancel_ms": cancel_ms_b, "forced_ms": cancel_ms_b, "return_code": return_code_b, "ui_calls": ui_calls_b, "result_status": status_b, "tree_dead": tree_dead_b, "survivors": survivors_b, "product_absent": absent_b, "mutex_free": mutex_free_b, "service_idle": service_idle_b, "target_folder_empty": leftovers_b, "handler_first_ms": handler_first_ms_b, "internal_ui_prev": internal_ui_prev_b, "external_ui_prev_non_null": external_ui_prev_non_null_b},
         }));
     }
     let measured = json!({
@@ -1166,8 +1178,10 @@ fn proof_8_1(ctx: &mut Ctx) -> Proof {
         "cancel_ms": msi_cancel_ms,
         "stop_ms_by_kind": {"msi_cancel": msi_cancel_ms, "install_tree": ctx.stop_install_ms, "transfer_tree": ctx.stop_transfer_ms},
         "ui_calls": ui_calls_total,
-        "budgets_ms": {"msi_cancel": 1000, "tree_kill": 2000, "verify": 500, "post_cap_monitor": 1500, "hard_cap": 5000},
-        "budget_note": "1000/2000/500 is a design allocation grounded on single samples only (MSI cancel 842 ms, tree kill 60 ms, verify 2-4 ms; n=1, runner only), not a measurement-derived limit; the empty 1500 ms is the post-interim-cap monitoring reserve.",
+        "handler_first_ms": handler_first_ms_total, "internal_ui_prev": internal_ui_prev_total, "external_ui_prev_non_null": external_ui_prev_non_null_total,
+        "firefox_excluded": "pre-installed in the runner image: C\\Program Files\\Mozilla Firefox already contained firefox.exe before install (runs 14 and 19); 8.1 is proven by VLC only",
+        "budgets_ms": {"msi_cancel": 2000, "tree_kill": 1000, "verify": 500, "post_cap_monitor": 1500, "hard_cap": 5000},
+"budget_note": "2000/1000/500 re-set in cycle 42 from measured samples (MSI cancel n=4: 842 spike, 1514 run 14, 1082 run 19 phase B, 293 run 19 8.9; max 1514; tree kill <=119 run 19, 60 spike; verify <=36 run 19), not a measurement-derived limit; the empty 1500 ms is the post-interim-cap monitoring reserve",
         "spike_reference": "unit3-kill-spike-c39 stage2: return 1602, cancel_ms 842, handler_calls 8099",
     });
     if any_fail {
