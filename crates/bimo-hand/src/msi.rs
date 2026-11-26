@@ -21,6 +21,7 @@ use crate::win32::wide;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 pub type UiHandler = extern "system" fn(*mut std::ffi::c_void, u32, *const u16, *const u16) -> i32;
@@ -29,6 +30,12 @@ static CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
 static HANDLER_CALLS: AtomicU64 = AtomicU64::new(0);
 static HANDLER_FIRST_MS: AtomicU64 = AtomicU64::new(0);
 static INSTALL_STARTED_MS: AtomicU64 = AtomicU64::new(0);
+static LAST_ACTION: Mutex<Option<String>> = Mutex::new(None);
+static REGISTER_PRODUCT_SEEN: AtomicBool = AtomicBool::new(false);
+static CANCEL_DEPTH_RECORDED: AtomicBool = AtomicBool::new(false);
+static ACTION_AT_CANCEL: Mutex<Option<String>> = Mutex::new(None);
+static REACHED_REGISTER_PRODUCT_AT_CANCEL: AtomicBool = AtomicBool::new(false);
+static HANDLER_CALLS_AT_CANCEL: AtomicU64 = AtomicU64::new(0);
 
 // INSTALLMESSAGE_* return values: IDOK = 1 (continue), IDCANCEL = 2.
 extern "system" fn ui_handler(
@@ -40,13 +47,106 @@ extern "system" fn ui_handler(
   if HANDLER_CALLS.fetch_add(1, Ordering::SeqCst) == 0 {
     HANDLER_FIRST_MS.store(now_ms(), Ordering::SeqCst);
                           }
+    if !_msg.is_null() {
+        record_msi_message(&read_message_text(_msg));
+    }
   if CANCEL_REQUESTED.load(Ordering::SeqCst) {
+      if !CANCEL_DEPTH_RECORDED.swap(true, Ordering::SeqCst) {
+          let last = LAST_ACTION.lock().ok().and_then(|g| g.clone());
+          if let Ok(mut slot) = ACTION_AT_CANCEL.lock() {
+              *slot = last;
+          }
+          REACHED_REGISTER_PRODUCT_AT_CANCEL.store(REGISTER_PRODUCT_SEEN.load(Ordering::SeqCst), Ordering::SeqCst);
+          HANDLER_CALLS_AT_CANCEL.store(HANDLER_CALLS.load(Ordering::SeqCst), Ordering::SeqCst);
+      }
     2
   } else {
     1
   }
 }
+fn read_message_text(msg: *const u16) -> String {
+    if msg.is_null() {
+        return String::new();
+    }
+    unsafe {
+        let mut len = 0usize;
+        while len < 8192 && *msg.add(len) != 0 {
+            len += 1;
+        }
+        let slice = std::slice::from_raw_parts(msg, len);
+        String::from_utf16_lossy(slice)
+    }
+}
+fn parse_action_start(text: &str) -> Option<String> {
+    if !text.contains("Action start") {
+        return None;
+    }
+    let after = text.splitn(2, "Action start").nth(1)?;
+    let parts: Vec<&str> = after.split(": ").collect();
+    if parts.len() < 4 {
+        return None;
+    }
+    let name = parts[3].trim().trim_end_matches('.').trim();
+    if name.is_empty() || name.contains(' ') {
+        return None;
+    }
+    Some(name.to_string())
+}
+fn known_action_in(text: &str) -> Option<String> {
+    for name in ["InstallValidate", "InstallInitialize", "ProcessComponents", "UnpublishComponents", "UnpublishFeatures", "InstallExecute", "AllocateSideBySide", "InstallFiles", "RegisterUser", "RegisterProduct", "PublishFeatures", "PublishProduct", "InstallFinalize"] {
+        if text.contains(name) {
+            return Some(name.to_string());
+        }
+    }
+    None
+}
+fn record_msi_message(text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    if text.contains("RegisterProduct") {
+        REGISTER_PRODUCT_SEEN.store(true, Ordering::SeqCst);
+    }
+    let action = parse_action_start(text).or_else(|| known_action_in(text));
+    if let Some(action) = action {
+        if let Ok(mut last) = LAST_ACTION.lock() {
+            *last = Some(action);
+        }
+    }
+}
+fn reset_cancel_depth() {
+    if let Ok(mut last) = LAST_ACTION.lock() {
+        *last = None;
+    }
+    REGISTER_PRODUCT_SEEN.store(false, Ordering::SeqCst);
+    CANCEL_DEPTH_RECORDED.store(false, Ordering::SeqCst);
+    if let Ok(mut slot) = ACTION_AT_CANCEL.lock() {
+        *slot = None;
+    }
+    REACHED_REGISTER_PRODUCT_AT_CANCEL.store(false, Ordering::SeqCst);
+    HANDLER_CALLS_AT_CANCEL.store(0, Ordering::SeqCst);
+}
 
+pub fn cancel_depth() -> Value {
+    let (last_action, reached, calls) = if CANCEL_DEPTH_RECORDED.load(Ordering::SeqCst) {
+        (
+            ACTION_AT_CANCEL.lock().ok().and_then(|g| g.clone()),
+            REACHED_REGISTER_PRODUCT_AT_CANCEL.load(Ordering::SeqCst),
+            HANDLER_CALLS_AT_CANCEL.load(Ordering::SeqCst),
+            )
+    } else {
+        (
+            LAST_ACTION.lock().ok().and_then(|g| g.clone()),
+            REGISTER_PRODUCT_SEEN.load(Ordering::SeqCst),
+            HANDLER_CALLS.load(Ordering::SeqCst),
+            )
+    };
+    json!({
+        "last_action": last_action,
+        "reached_register_product": reached,
+        "handler_calls_at_cancel": calls,
+    })
+}
 #[link(name = "msi")]
 extern "system" {
   fn MsiInstallProductW(pkg: *const u16, cmdline: *const u16) -> u32;
@@ -91,6 +191,7 @@ pub struct CancelOutcome {
 pub fn install_with_cancel(msi_path: &str, cancel_after_ms: u64) -> CancelOutcome {
   CANCEL_REQUESTED.store(false, Ordering::SeqCst);
   HANDLER_CALLS.store(0, Ordering::SeqCst);
+    reset_cancel_depth();
   unsafe {
     // INSTALLUILEVEL_NONE = 2: no dialogs on the runner.
     MsiSetInternalUI(2, std::ptr::null_mut());
@@ -255,6 +356,7 @@ pub fn install_with_external_cancel(msi_path: &str, cancel: Arc<AtomicBool>) -> 
     HANDLER_CALLS.store(0, Ordering::SeqCst);
   HANDLER_FIRST_MS.store(0, Ordering::SeqCst);
   INSTALL_STARTED_MS.store(now_ms(), Ordering::SeqCst);
+    reset_cancel_depth();
     let cancel_at: Arc<std::sync::Mutex<Option<Instant>>> = Arc::new(std::sync::Mutex::new(None));
     let done = Arc::new(AtomicBool::new(false));
     let watcher_cancel = Arc::clone(&cancel);
