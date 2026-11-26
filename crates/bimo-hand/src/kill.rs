@@ -22,7 +22,7 @@
 //!   wmiprvse, not the command's tree. That is an explicit
 //!   acknowledgement, not a claim that PPID covers COM.
 //!
-//! Budgets (design allocation, not measurement-derived limits): the
+//! Budgets (temporary (interim) design allocation, not measurement-derived limits): the
 //! 2000/1000/500 ms split is a design allocation re-set in cycle 42
 //! from measured samples -- MSI cancel n = 4: 842 spike, 1514 run 14,
 //! 1082 run 19 phase B, 293 run 19 8.9 (max 1514); tree kill <= 119
@@ -153,6 +153,7 @@ pub struct AbortOutcome {
     pub orphans_enumerated: usize,
     pub orphan_kill_attempts: Vec<OrphanKillAttempt>,
     pub note: String,
+    pub cancel_depth: Value,
 }
 
 impl AbortOutcome {
@@ -183,6 +184,7 @@ impl AbortOutcome {
             "orphans_enumerated": self.orphans_enumerated,
             "orphan_kill_attempts": self.orphan_kill_attempts.iter().map(|a| json!({"pid": a.pid, "ok": a.ok, "last_error": a.last_error})).collect::<Vec<_>>(),
             "note": self.note,
+            "cancel_depth": self.cancel_depth,
         })
     }
 }
@@ -317,6 +319,7 @@ fn abort_msi(
         orphans_enumerated: 0,
         orphan_kill_attempts: Vec::new(),
         ui_calls: handler_calls,
+        cancel_depth: msi::cancel_depth(),
         note: format!("msi cancel via IDCANCEL; handler_calls={}; stop-unconfirmed means the queue must stay blocked until Global_MSI_Execute is free and the supervisor records a final result", handler_calls),
     }
 }
@@ -410,6 +413,7 @@ fn abort_command(
         leftovers_empty: None,
         stop_unconfirmed,
         ui_calls: 0,
+        cancel_depth: json!({"last_action": null, "reached_register_product": false, "handler_calls_at_cancel": 0}),
         handler_first_ms: 0,
         internal_ui_prev: 0,
         external_ui_prev_non_null: false,
