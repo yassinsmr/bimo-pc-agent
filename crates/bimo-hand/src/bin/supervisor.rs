@@ -34,6 +34,7 @@ const MAX_RESTARTS: usize = 3;
 const RESTART_WINDOW_SECS: u64 = 10 * 60;
 
 fn main() {
+    let _ = bimo_hand::win32::enable_debug_privilege();
     let args: Vec<String> = std::env::args().collect();
     let mut data_dir = PathBuf::from(".");
     let mut heartbeat_secs: u64 = 30;
@@ -609,6 +610,7 @@ fn handle_request(
                     "remaining_pids": outcome.remaining_pids,
                     "handles_released": outcome.handles_released,
                     "partial_cleaned": partial_cleaned,
+                    "abort": abort_outcome.to_json(),
                     "supervisor_elevated": supervisor_elevated,
                     "installer_elevated": installer_elevated,
                     "duration_ms": started_at.elapsed().as_millis() as u64,
