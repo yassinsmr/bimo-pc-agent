@@ -1,0 +1,161 @@
+{
+  "measurements": {
+    "cpu_note": "not measured on the runner",
+    "cpu_percent": null,
+    "queue_size": 8,
+    "ram_available_mb": 13593,
+    "ram_total_mb": 16378,
+    "revert_failed_correctly": 1,
+    "revert_success_rate": 1.0,
+    "reverts_expected_success": 1,
+    "reverts_succeeded": 1,
+    "stop_ms_by_kind": {
+      "install": 5040,
+      "probe_grandchild": 5054,
+      "transfer": 5047
+    }
+  },
+  "proofs": {
+    "8.1": {
+      "measured": {
+        "attempt": 0,
+        "handles_released": true,
+        "install_duration_ms": 11186,
+        "installer_elevated": true,
+        "kill_fraction": 0.4,
+        "kill_ms_after_start": 4497,
+        "msi_sha256": "ce1fe655b7cd8e11a55dde25502f42e0bf0a9d3bc0556583b6a841fa37e88f02",
+        "msi_url": "https://get.videolan.org/vlc/3.0.20/win64/vlc-3.0.20-win64.msi",
+        "remaining_pids": [
+          4568
+        ],
+        "stop_method": "forced",
+        "stop_ms": 5040,
+        "supervisor_elevated": true,
+        "tree_dead": false
+      },
+      "status": "fail"
+    },
+    "8.10a": {
+      "measured": {
+        "fake_size_bytes": 31862870016,
+        "free_bytes": 30789128192,
+        "nothing_written": true,
+        "prepare_error": "disk-space",
+        "required_bytes": 35049157017,
+        "state_failed_disk_space": true,
+        "target_exists": false
+      },
+      "status": "pass"
+    },
+    "8.10b": {
+      "measured": {
+        "checksum_matches": true,
+        "destination_checksum_ok": true,
+        "file_back_at_original_path": true,
+        "revert_outcome": "Reverted",
+        "state": "reverted",
+        "transfer_done": true
+      },
+      "status": "pass"
+    },
+    "8.2": {
+      "measured": {
+        "attempt": 0,
+        "no_corrupt_file_presented_as_complete": true,
+        "partial_cleaned": true,
+        "partial_file_gone": true,
+        "progress_pct_at_kill": 25.0,
+        "status": "stopped",
+        "stop_method": "cooperative",
+        "stop_ms": 5047,
+        "tree_dead": false
+      },
+      "status": "fail"
+    },
+    "8.3": {
+      "measured": {
+        "alert_recorded": true,
+        "app_marker_intact": true,
+        "escalation_file_exists": true,
+        "revert_failed": true
+      },
+      "status": "pass"
+    },
+    "8.4": {
+      "measured": {
+        "eicar_sha256": "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f",
+        "file_untouched": true,
+        "guardian_verdict_block_eicar": true,
+        "prepare_error": "blocked_eicar",
+        "quarantine_hash_matches": true,
+        "quarantine_ok": true
+      },
+      "status": "pass"
+    },
+    "8.5": {
+      "measured": {
+        "grandchild_in_job": true,
+        "grandchild_pid": 9696,
+        "job_process_count": 4,
+        "job_process_limit": 32,
+        "stop_ms": 5054
+      },
+      "status": "pass"
+    },
+    "8.6": {
+      "measured": {
+        "first_enqueued": true,
+        "no_file_moves": true,
+        "organize_prepare_error": "needs_approval",
+        "replay_duplicate": true
+      },
+      "status": "pass"
+    },
+    "8.7": {
+      "measured": {
+        "prepare_error": "guardian_unavailable",
+        "stayed_queued_with_reason": true
+      },
+      "status": "pass"
+    },
+    "8.8": {
+      "measured": {
+        "deadman_written": true,
+        "heartbeat_after_restart": true,
+        "heartbeat_back_after_deadman": true,
+        "heartbeat_returned": true,
+        "missed_beats_reached": true,
+        "new_commands_refused_while_deadman": true,
+        "new_worker_pid": 8720,
+        "old_worker_pid": 7712,
+        "restart_recorded": true,
+        "stopped_written": true,
+        "worker_restarted": true
+      },
+      "status": "pass"
+    },
+    "8.9": {
+      "measured": {
+        "cpu_note": "not measured on the runner",
+        "cpu_percent": null,
+        "queue_size": 8,
+        "ram_available_mb": 13593,
+        "ram_total_mb": 16378,
+        "revert_failed_correctly": 1,
+        "revert_success_rate": 1.0,
+        "reverts_expected_success": 1,
+        "reverts_succeeded": 1,
+        "stop_ms_by_kind": {
+          "install": 5040,
+          "probe_grandchild": 5054,
+          "transfer": 5047
+        }
+      },
+      "status": "pass"
+    }
+  },
+  "red_line": "violated",
+  "runner_note": "does not prove device performance",
+  "verdict": "fail"
+}
