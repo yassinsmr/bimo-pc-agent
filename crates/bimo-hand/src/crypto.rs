@@ -109,16 +109,16 @@ fn dpapi_protect(plain: &[u8]) -> Result<String, String> {
             None,
             None,
             None,
-            CRYPTPROTECT_UI_FORBIDDEN.0,
+            CRYPTPROTECT_UI_FORBIDDEN,
             &mut output,
         )
     };
-    if !ok.as_bool() {
+    if ok.is_err() {
         return Err("CryptProtectData failed".into());
     }
     let bytes = unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec() };
     unsafe {
-        let _ = LocalFree(HLOCAL(output.pbData as isize));
+        let _ = LocalFree(Some(HLOCAL(output.pbData as *mut core::ffi::c_void)));
     }
     Ok(hex_encode(&bytes))
 }
@@ -137,12 +137,12 @@ fn dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
     let ok = unsafe {
         CryptUnprotectData(&input, None, None, None, None, 0, &mut output)
     };
-    if !ok.as_bool() {
+    if ok.is_err() {
         return Err("CryptUnprotectData failed".into());
     }
     let bytes = unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec() };
     unsafe {
-        let _ = LocalFree(HLOCAL(output.pbData as isize));
+        let _ = LocalFree(Some(HLOCAL(output.pbData as *mut core::ffi::c_void)));
     }
     Ok(bytes)
 }
