@@ -253,11 +253,20 @@ where
 mod tests {
     use super::*;
 
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    // Unique per call: parallel tests share one process and one second,
+    // so a (pid, second) name collides and one test deletes another's
+    // directory mid-test (run 12: heartbeat_paused_by_hook_file failed
+    // with NotFound at fs::write). Same pattern as queue.rs.
     fn test_dir() -> PathBuf {
+        let n = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!(
             "bimo-hand-ctest-{}-{}",
             std::process::id(),
-            utc_now_secs()
+            n
         ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
