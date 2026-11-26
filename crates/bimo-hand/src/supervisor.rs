@@ -99,8 +99,8 @@ mod imp {
     use super::*;
     // Win32 ABI constants (windows 0.62 does not export these).
     const STILL_ACTIVE: u32 = 259;
-    const WAIT_OBJECT_0: u32 = 0;
-    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    const WAIT_OBJECT_0: WAIT_EVENT = WAIT_EVENT(0);
+    use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_EVENT};
     use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
     use windows::Win32::System::Console::{GenerateConsoleCtrlEvent, CTRL_BREAK_EVENT};
     use windows::Win32::System::Diagnostics::ToolHelp::{
@@ -160,17 +160,17 @@ mod imp {
             // Build the attribute list carrying the job handle, so the
             // process is assigned to the job BEFORE its first thread runs.
             let mut size: usize = 0;
-            let _ = InitializeProcThreadAttributeList(None, 1, 0, &mut size);
+            let _ = InitializeProcThreadAttributeList(None, 1, Some(0), &mut size);
             let mut attr_storage = vec![0u8; size];
             let attr_list = attr_storage.as_mut_ptr() as *mut core::ffi::c_void;
-            InitializeProcThreadAttributeList(Some(attr_list), 1, 0, &mut size)
+        InitializeProcThreadAttributeList(Some(LPPROC_THREAD_ATTRIBUTE_LIST(attr_list)), 1, Some(0), &mut size)
                 .map_err(|e| format!("InitializeProcThreadAttributeList failed: {}", e))?;
             let job_handle = job.handle;
             UpdateProcThreadAttribute(
-                attr_list,
+                LPPROC_THREAD_ATTRIBUTE_LIST(attr_list),
                 0,
-                PROC_THREAD_ATTRIBUTE_JOB_LIST,
-                &job_handle as *const _ as *const core::ffi::c_void,
+                PROC_THREAD_ATTRIBUTE_JOB_LIST as usize,
+                Some(&job_handle as *const _ as *const core::ffi::c_void),
                 std::mem::size_of::<HANDLE>(),
                 None,
                 None,
@@ -201,7 +201,7 @@ mod imp {
                 Some(PWSTR(command_line.as_mut_ptr())),
                 None,
                 None,
-                BOOL(0),
+                false,
                 EXTENDED_STARTUPINFO_PRESENT | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT,
                 None,
                 match &dir_wide {
@@ -223,7 +223,7 @@ mod imp {
 
     pub fn is_process_in_job(pid: u32, job: &Job) -> bool {
         unsafe {
-            let handle = match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, BOOL(0), pid) {
+            let handle = match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
                 Ok(h) => h,
                 Err(_) => return false,
             };
@@ -250,7 +250,7 @@ mod imp {
 
     pub fn process_alive(pid: u32) -> bool {
         unsafe {
-            let handle = match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, BOOL(0), pid) {
+            let handle = match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
                 Ok(h) => h,
                 Err(_) => return false,
             };
@@ -263,7 +263,7 @@ mod imp {
 
     pub fn process_exit_code(pid: u32) -> Option<u32> {
         unsafe {
-            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, BOOL(0), pid).ok()?;
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
             let mut code: u32 = 0;
             let ok = GetExitCodeProcess(handle, &mut code).is_ok();
             let _ = CloseHandle(handle);
@@ -277,7 +277,7 @@ mod imp {
 
     pub fn wait_process(pid: u32, timeout_ms: u32) -> bool {
         unsafe {
-            let handle = match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, BOOL(0), pid) {
+            let handle = match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
                 Ok(h) => h,
                 Err(_) => return true,
             };
@@ -373,7 +373,7 @@ mod imp {
 
     pub fn is_process_elevated(pid: u32) -> bool {
         unsafe {
-            let handle = match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, BOOL(0), pid) {
+            let handle = match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
                 Ok(h) => h,
                 Err(_) => return false,
             };
