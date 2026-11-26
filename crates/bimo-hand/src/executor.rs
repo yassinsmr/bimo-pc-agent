@@ -166,7 +166,7 @@ pub fn free_space_bytes(path: &Path) -> Option<u64> {
         )
     };
     if ok.as_bool() {
-        Some(unsafe { *free.QuadPart() })
+        Some(unsafe { free.QuadPart })
     } else {
         None
     }
