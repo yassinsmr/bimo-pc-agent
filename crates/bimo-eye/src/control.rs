@@ -132,11 +132,5 @@ pub fn start_control(
             }
             std::thread::sleep(Duration::from_secs(1));
         }
-        // اختبار مؤقت: تعليق خيط control
-        if std::env::var("BIMO_EYE_HANG_CONTROL").as_deref() == Ok("1") {
-            loop {
-                std::thread::sleep(Duration::from_secs(3600));
-            }
-        }
     })
 }
