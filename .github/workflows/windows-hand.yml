@@ -1,0 +1,98 @@
+# Windows Hand (Unit 3 Part 4): build + test bimo-hand, run the self-test
+# (proofs 8.1-8.10b, red-line verdict), publish hand-self-test.json to
+# the spike-results branch and upload the results as an artifact.
+# Mirrors .github/workflows/windows-eye.yml.
+#
+# RULE: no merge until CI is green on the branch; after merge, CI on the
+# new main must be green too.
+name: Windows Hand
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "crates/bimo-hand/**"
+      - ".github/workflows/windows-hand.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+
+permissions:
+  contents: write
+
+jobs:
+  hand:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      # FIRST build WITHOUT --locked: it regenerates Cargo.lock for the
+      # new crate. Commit Cargo.lock back to the same branch if it
+      # changed (same git config/commit/push pattern as the
+      # results-publish step below).
+      - name: Build once without --locked and commit Cargo.lock if it changed
+        shell: pwsh
+        run: |
+          cargo build --release --target x86_64-pc-windows-msvc -p bimo-hand
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git commit -m "hand(c38): regenerate Cargo.lock for bimo-hand"
+            git push origin HEAD:${{ github.ref_name }}
+          }
+
+      - name: Build bimo-hand (locked)
+        shell: pwsh
+        run: cargo build --release --target x86_64-pc-windows-msvc --locked -p bimo-hand
+
+      - name: Test bimo-hand (locked)
+        shell: pwsh
+        run: cargo test --release --target x86_64-pc-windows-msvc --locked -p bimo-hand
+
+      - name: Run bimo-hand-self-test
+        shell: pwsh
+        run: .\target\x86_64-pc-windows-msvc\release\bimo-hand-self-test.exe --out hand-self-test.json
+
+      # Same pattern as windows-eye: move aside, checkout spike-results,
+      # move back, commit, push. NEVER force-push.
+      - name: Publish hand-self-test.json to spike-results
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path hand-self-test.json) {
+            New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\hand-results" | Out-Null
+            Move-Item hand-self-test.json "$env:RUNNER_TEMP\hand-results\hand-self-test.json" -Force
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git fetch origin spike-results
+            git checkout spike-results
+            Move-Item "$env:RUNNER_TEMP\hand-results\hand-self-test.json" hand-self-test.json -Force
+            git add hand-self-test.json
+            git diff --cached --quiet
+            if ($LASTEXITCODE -ne 0) {
+              git commit -m "hand(c38): hand-self-test.json from run ${{ github.run_number }}"
+              git push origin spike-results
+            }
+          }
+
+      - name: Upload hand-self-test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hand-self-test
+          path: |
+            hand-self-test.json
+            target\x86_64-pc-windows-msvc\release\bimo-hand-self-test.exe
+            target\x86_64-pc-windows-msvc\release\bimo-hand-supervisor.exe
+          retention-days: 30
+          if-no-files-found: warn
