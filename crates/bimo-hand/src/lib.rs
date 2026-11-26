@@ -437,6 +437,10 @@ pub mod msi {
         let _ = path;
         json!({"exists": false, "entries": []})
     }
+    pub fn cancel_depth() -> Value {
+        json!({"last_action": null, "reached_register_product": false, "handler_calls_at_cancel": 0})
+    }
+    
 }
 
 #[cfg(not(windows))]
