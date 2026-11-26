@@ -511,6 +511,10 @@ fn handle_request(
     };
     let pid = launched.pid;
     let installer_elevated = sup::is_process_elevated(pid);
+    // Orphan identity, captured while the root is alive (8.2b): the
+    // --slow-copy root exits ~40 ms after hand.stop, before the 100 ms poll.
+    let root_exe_path = bimo_hand::win32::exe_path(pid).unwrap_or_default();
+    let root_window_start = bimo_hand::win32::process_creation_time(pid).unwrap_or(SystemTime::UNIX_EPOCH);
     let _ = write_json_file(
         &exec_started_path(data_dir, &req.id),
         &json!({
@@ -536,8 +540,8 @@ fn handle_request(
             let abort_outcome = kill::abort(
                 kill::AbortTarget::Command {
                     root_pid: pid,
-                    exe_path: bimo_hand::win32::exe_path(pid).unwrap_or_default(),
-                    window_start: bimo_hand::win32::process_creation_time(pid).unwrap_or(SystemTime::UNIX_EPOCH),
+exe_path: root_exe_path.clone(),
+                    window_start: root_window_start,
                     install_dir: None,
                 },
                 kill::StopTrigger::HandStop,
@@ -579,8 +583,8 @@ fn handle_request(
             let abort_outcome = kill::abort(
                 kill::AbortTarget::Command {
                     root_pid: pid,
-                    exe_path: bimo_hand::win32::exe_path(pid).unwrap_or_default(),
-                    window_start: bimo_hand::win32::process_creation_time(pid).unwrap_or(SystemTime::UNIX_EPOCH),
+                    exe_path: root_exe_path.clone(),
+                    window_start: root_window_start,
                     install_dir: install_dir.map(|d| d.to_string_lossy().to_string()),
                 },
                 trigger_from_reason(&reason),
