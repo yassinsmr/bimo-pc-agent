@@ -274,6 +274,7 @@ pub mod kill {
         pub stop_unconfirmed: bool,
         pub ui_calls: u64,
         pub note: String,
+        pub cancel_depth: Value,
     }
 
     impl AbortOutcome {
@@ -299,6 +300,7 @@ pub mod kill {
                 "stop_unconfirmed": self.stop_unconfirmed,
                 "ui_calls": self.ui_calls,
                 "note": self.note,
+                "cancel_depth": self.cancel_depth,
             })
         }
     }
@@ -330,6 +332,7 @@ pub mod kill {
             stop_unconfirmed: false,
             ui_calls: 0,
             note: "abort() is windows-only; this stub never kills anything".to_string(),
+            cancel_depth: json!({"last_action": null, "reached_register_product": false, "handler_calls_at_cancel": 0}),
         }
     }
 }
