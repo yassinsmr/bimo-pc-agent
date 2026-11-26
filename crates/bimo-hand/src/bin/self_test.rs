@@ -760,6 +760,14 @@ fn proof_8_2b(ctx: &mut Ctx) -> Proof {
     };
     let exe_str = exe.to_string_lossy().to_string();
     let window_start = std::time::SystemTime::now();
+    // Warm up the WMI/DCOM stack before the transfer starts: the first
+    // Invoke-CimMethod in a fresh PowerShell pays the service-connection
+    // cost (10+ s on the runner), which alone can outlast the 1 GB
+    // transfer (run 13: transfer done at 11575 ms before hand.stop).
+    // A read-only CIM query exercises the same stack with no side effects.
+    let _ = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", "Get-CimInstance Win32_OperatingSystem | Out-Null"])
+        .output();
     let dst = ctx.work_dir.join("orphan-copy.bin");
     let _ = std::fs::remove_file(&dst);
     let mut cmd = new_command(
@@ -997,7 +1005,7 @@ fn proof_8_1(ctx: &mut Ctx) -> Proof {
          VLC_FALLBACK,
          r"C:\Program Files\VideoLAN\VLC"),
         ("firefox", "Mozilla Firefox",
-         "https://download.mozilla.org/?product=firefox-msi-latest-ssl&os=win64&lang=multi",
+         "https://download.mozilla.org/?product=firefox-msi-latest-ssl&os=win64&lang=en-US",
          "",
          r"C:\Program Files\Mozilla Firefox"),
     ];
