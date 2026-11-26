@@ -271,10 +271,8 @@ pub fn install_with_external_cancel(msi_path: &str, cancel: Arc<AtomicBool>) -> 
             std::thread::sleep(Duration::from_millis(5));
         }
     });
-    unsafe {
-        let internal_ui_prev = MsiSetInternalUI(2, std::ptr::null_mut());
-        let external_ui_prev = MsiSetExternalUIW(Some(ui_handler), 0xFFFF_FFFF, std::ptr::null_mut());
-    }
+    let internal_ui_prev = unsafe { MsiSetInternalUI(2, std::ptr::null_mut()) };
+    let external_ui_prev = unsafe { MsiSetExternalUIW(Some(ui_handler), 0xFFFF_FFFF, std::ptr::null_mut()) };
     let start = Instant::now();
     let pkg = wide(msi_path);
     let cmd = wide("REBOOT=ReallySuppress");
