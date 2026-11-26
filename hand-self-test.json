@@ -3,15 +3,15 @@
     "cpu_note": "not measured on the runner",
     "cpu_percent": null,
     "queue_size": 9,
-    "ram_available_mb": 13659,
+    "ram_available_mb": 13610,
     "ram_total_mb": 16378,
     "revert_failed_correctly": 1,
-    "revert_success_rate": 0.0,
-    "reverts_expected_success": 0,
-    "reverts_succeeded": 0,
+    "revert_success_rate": 1.0,
+    "reverts_expected_success": 1,
+    "reverts_succeeded": 1,
     "stop_ms_by_kind": {
-      "install": 75,
-      "probe_grandchild": 75,
+      "install": 1471,
+      "probe_grandchild": 77,
       "transfer": 174
     }
   },
@@ -26,13 +26,13 @@
           "tree_kill": 2000,
           "verify": 500
         },
-        "cancel_ms": 69,
+        "cancel_ms": 1461,
         "installers": [
           {
             "installer": "vlc",
             "name_substring": "VLC media player",
             "phase_a": {
-              "install_duration_ms": 14694,
+              "install_duration_ms": 10878,
               "pre_command_state": {
                 "msi_execute_mutex_free": true,
                 "product_state": null,
@@ -50,16 +50,16 @@
               "uninstall_return_code": 0
             },
             "phase_b": {
-              "cancel_ms": 69,
-              "forced_ms": 69,
-              "kill_ms_after_start": 5877,
+              "cancel_ms": 1461,
+              "forced_ms": 1461,
+              "kill_ms_after_start": 4351,
               "mutex_free": true,
               "product_absent": true,
               "result_status": "stopped",
               "return_code": 1602,
               "service_idle": true,
               "status": "pass",
-              "stop_ms": 75,
+              "stop_ms": 1471,
               "survivors": [],
               "target_folder_empty": true,
               "tree_dead": true,
@@ -79,8 +79,8 @@
         ],
         "spike_reference": "unit3-kill-spike-c39 stage2: return 1602, cancel_ms 842, handler_calls 8099",
         "stop_ms_by_kind": {
-          "install_tree": 75,
-          "msi_cancel": 69,
+          "install_tree": 1471,
+          "msi_cancel": 1461,
           "transfer_tree": 174
         },
         "ui_calls": 0
@@ -89,11 +89,11 @@
     },
     "8.10a": {
       "measured": {
-        "fake_size_bytes": 29137616896,
-        "free_bytes": 28063875072,
+        "fake_size_bytes": 29656248320,
+        "free_bytes": 28582506496,
         "nothing_written": true,
         "prepare_error": "disk-space",
-        "required_bytes": 32051378585,
+        "required_bytes": 32621873152,
         "state_failed_disk_space": true,
         "target_exists": false
       },
@@ -101,11 +101,14 @@
     },
     "8.10b": {
       "measured": {
-        "destination_checksum_ok": false,
-        "done": false,
-        "reason": "transfer did not complete cleanly"
+        "checksum_matches": true,
+        "destination_checksum_ok": true,
+        "file_back_at_original_path": true,
+        "revert_outcome": "Reverted",
+        "state": "reverted",
+        "transfer_done": true
       },
-      "status": "fail"
+      "status": "pass"
     },
     "8.11": {
       "measured": {
@@ -132,7 +135,7 @@
     "8.2b": {
       "measured": {
         "exec_result": {
-          "duration_ms": 14768,
+          "duration_ms": 11575,
           "exit_code": 0,
           "handles_released": true,
           "installer_elevated": true,
@@ -141,14 +144,15 @@
         },
         "killed_by": "alternative-naming (creation-time window + exe path)",
         "orphan_dead": false,
+        "orphan_exe": "D:\\a\\bimo-pc-agent\\bimo-pc-agent\\target\\x86_64-pc-windows-msvc\\release\\bimo-hand-supervisor.exe",
         "orphan_gone_by_window": false,
         "orphan_in_ppid_tree": false,
         "orphan_parent_is_wmiprvse": true,
-        "orphan_pid": 8200,
-        "orphan_ppid": 692,
+        "orphan_pid": 2156,
+        "orphan_ppid": 5048,
         "orphan_ppid_exe": "C:\\Windows\\System32\\wbem\\WmiPrvSE.exe",
         "ppid_enumeration_does_not_cover_wmi_com": true,
-        "root_pid": 2196
+        "root_pid": 7016
       },
       "status": "fail"
     },
@@ -175,10 +179,10 @@
     "8.5": {
       "measured": {
         "grandchild_in_job": true,
-        "grandchild_pid": 3220,
+        "grandchild_pid": 7324,
         "job_process_count": 4,
         "job_process_limit": 32,
-        "stop_ms": 75
+        "stop_ms": 77
       },
       "status": "pass"
     },
@@ -206,8 +210,8 @@
         "heartbeat_returned": true,
         "missed_beats_reached": true,
         "new_commands_refused_while_deadman": true,
-        "new_worker_pid": 3792,
-        "old_worker_pid": 8168,
+        "new_worker_pid": 2564,
+        "old_worker_pid": 5668,
         "restart_recorded": true,
         "stopped_written": true,
         "worker_restarted": true
@@ -218,26 +222,26 @@
       "measured": {
         "abort": {
           "cooperative_ms": 0,
-          "forced_ms": 138,
+          "forced_ms": 696,
           "handles_released": true,
           "installer_kind": "msi",
           "leftovers_empty": true,
           "mutex_free": true,
-          "note": "msi cancel via IDCANCEL; handler_calls=4536; stop-unconfirmed means the queue must stay blocked until Global_MSI_Execute is free and the supervisor records a final result",
+          "note": "msi cancel via IDCANCEL; handler_calls=7030; stop-unconfirmed means the queue must stay blocked until Global_MSI_Execute is free and the supervisor records a final result",
           "product_absent": true,
           "product_state": null,
           "remaining_pids": [
-            1488
+            7308
           ],
           "return_code": 1602,
           "service_idle": true,
           "status": "stopped",
-          "stop_ms": 152,
+          "stop_ms": 708,
           "stop_unconfirmed": false,
           "survivors": [],
           "tree_dead": true,
           "trigger": "ttl",
-          "ui_calls": 4536,
+          "ui_calls": 7030,
           "verify_ms": 35
         },
         "mutex_free": true,
