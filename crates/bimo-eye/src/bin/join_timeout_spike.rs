@@ -10,7 +10,7 @@
 // ملاحظة: لا نتحقق من حدث agent.stop النهائي للكاتب؛ فقد يبقى الكاتب منفصلًا
 // بعد مهلته الخاصة، وهذا متوقع.
 
-use bimo_eye::{start, EyeConfig};
+use bimo_eye::eye::{start, EyeConfig};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
