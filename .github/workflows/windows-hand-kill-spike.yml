@@ -1,0 +1,109 @@
+# Windows Hand Kill Spike (Unit 3 Part 4, cycle 39, measurement only).
+#
+# Builds bimo-hand-kill-spike for real Windows and runs its four
+# stages (stage 0: reproduce c38 proof 8.1 with the old
+# TerminateJobObject-only stop; stage 1: same scenario with the
+# PPID tree kill; stage 2: MSI cancel via MsiInstallProduct +
+# IDCANCEL; stage 3: the 8.2 transfer with the PPID tree kill),
+# then publishes hand-kill-spike.json to the spike-results branch
+# and uploads the results as an artifact.
+# Mirrors .github/workflows/windows-hand.yml (pwsh flavour).
+#
+# The binary exits 0 when the JSON is written, whatever the stage
+# verdicts are: this spike measures, it does not gate. Results go
+# to the spike-results branch (never gate-results), with the same
+# move-aside / checkout / move-back / commit / push pattern as
+# windows-eye and windows-hand. NEVER force-push.
+# No merge, no PR: this is a spike branch.
+name: Windows Hand Kill Spike
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "crates/bimo-hand-kill-spike/**"
+      - ".github/workflows/windows-hand-kill-spike.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+
+permissions:
+  contents: write
+
+jobs:
+  hand-kill-spike:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      # FIRST build WITHOUT --locked: it regenerates Cargo.lock for the
+      # new crate. Commit Cargo.lock back to the same branch if it
+      # changed (same git config/commit/push pattern as the
+      # results-publish step below).
+      - name: Build once without --locked and commit Cargo.lock if it changed
+        shell: pwsh
+        run: |
+          cargo build --release --target x86_64-pc-windows-msvc -p bimo-hand-kill-spike
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git commit -m "hand-kill-spike(c39): regenerate Cargo.lock for bimo-hand-kill-spike"
+            git push origin HEAD:${{ github.ref_name }}
+          }
+
+      - name: Build bimo-hand-kill-spike (locked)
+        shell: pwsh
+        run: cargo build --release --target x86_64-pc-windows-msvc --locked -p bimo-hand-kill-spike
+
+      - name: Test bimo-hand-kill-spike (locked)
+        shell: pwsh
+        run: cargo test --release --target x86_64-pc-windows-msvc --locked -p bimo-hand-kill-spike
+
+      - name: Run bimo-hand-kill-spike
+        shell: pwsh
+        run: .\target\x86_64-pc-windows-msvc\release\bimo-hand-kill-spike.exe --out hand-kill-spike.json
+
+      # Same pattern as windows-eye / windows-hand: move aside,
+      # checkout spike-results, move back, commit, push.
+      # NEVER force-push.
+      - name: Publish hand-kill-spike.json to spike-results
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path hand-kill-spike.json) {
+            New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\hand-kill-results" | Out-Null
+            Move-Item hand-kill-spike.json "$env:RUNNER_TEMP\hand-kill-results\hand-kill-spike.json" -Force
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git fetch origin spike-results
+            git checkout spike-results
+            Move-Item "$env:RUNNER_TEMP\hand-kill-results\hand-kill-spike.json" hand-kill-spike.json -Force
+            git add hand-kill-spike.json
+            git diff --cached --quiet
+            if ($LASTEXITCODE -ne 0) {
+              git commit -m "hand-kill-spike(c39): hand-kill-spike.json from run ${{ github.run_number }}"
+              git push origin spike-results
+            }
+          }
+
+      - name: Upload hand-kill-spike results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hand-kill-spike
+          path: |
+            hand-kill-spike.json
+            target\x86_64-pc-windows-msvc\release\bimo-hand-kill-spike.exe
+          retention-days: 30
+          if-no-files-found: warn
