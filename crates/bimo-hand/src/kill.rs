@@ -23,9 +23,10 @@
 //!   acknowledgement, not a claim that PPID covers COM.
 //!
 //! Budgets (design allocation, not measurement-derived limits): the
-//! 1000/2000/500 ms split is a design allocation grounded on single
-//! samples only -- MSI cancel 842 ms, tree kill 60 ms, verify 2-4 ms
-//! (n = 1, runner only). The empty 1500 ms is the post-interim-cap
+/!! 2000/1000/500 ms split is a design allocation re-set in cycle 42
+/!! from measured samples -- MSI cancel n = 4: 842 spike, 1514 run 14,
+/!! 1082 run 19 phase B, 293 run 19 8.9 (max 1514); tree kill <= 119
+/!! run 19, 60 spike; verify <= 36 run 19. The empty 1500 ms is the
 //! monitoring reserve (`POST_CAP_MONITOR_MS`).
 //!
 //! Success (v2 condition 1) is restoration to the pre-command state:
@@ -49,9 +50,9 @@ use std::time::{Duration, Instant, SystemTime};
 /// Hard cap for a revert/stop, in ms (v2 condition 2).
 pub const HARD_CAP_MS: u64 = 5000;
 /// Design allocation for the MSI cancel (rollback) phase, in ms.
-pub const MSI_CANCEL_BUDGET_MS: u64 = 1000;
+pub const MSI_CANCEL_BUDGET_MS: u64 = 2000;
 /// Design allocation for the tree-kill phase, in ms.
-pub const TREE_KILL_BUDGET_MS: u64 = 2000;
+pub const TREE_KILL_BUDGET_MS: u64 = 1000;
 /// Design allocation for the verification phase, in ms.
 pub const VERIFY_BUDGET_MS: u64 = 500;
 /// Post-interim-cap monitoring reserve, in ms.
@@ -209,6 +210,8 @@ fn survivors_in(pids: &[u32]) -> Vec<Value> {
 /// and no other function in the crate kills a process, a job, or an
 /// MSI install.
 pub fn abort(target: AbortTarget, trigger: StopTrigger) -> AbortOutcome {
+    // Enable SeDebugPrivilege so the orphan enumeration can open WMI-spawned processes.
+    let _ = win32::enable_debug_privilege();
     let start = Instant::now();
     match target {
         AbortTarget::Msi { cancel, outcome, product_code, name_substring, target_dir, pre_msiexec_pids } => {
