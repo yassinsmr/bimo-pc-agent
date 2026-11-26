@@ -30,6 +30,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "bimo-hand-kill-spike"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "bimo-island"
 version = "0.1.0"
 dependencies = [
