@@ -442,7 +442,7 @@ fn handle_msi_request(req: &ExecRequest, ctl: &HandControl, data_dir: &Path, sta
         let mut done: Option<bimo_hand::msi::CancelOutcome> = None;
         if let Ok(slot) = outcome_slot.lock() {
             if let Some(o) = slot.as_ref() {
-                done = Some(bimo_hand::msi::CancelOutcome { return_code: o.return_code, cancel_ms: o.cancel_ms, total_ms: o.total_ms, handler_calls: o.handler_calls, cancelled: o.cancelled });
+                    done = Some(bimo_hand::msi::CancelOutcome { return_code: o.return_code, cancel_ms: o.cancel_ms, total_ms: o.total_ms, handler_calls: o.handler_calls, handler_first_ms: o.handler_first_ms, internal_ui_prev: o.internal_ui_prev, external_ui_prev_non_null: o.external_ui_prev_non_null, cancelled: o.cancelled });
             }
         }
         if let Some(o) = done {
