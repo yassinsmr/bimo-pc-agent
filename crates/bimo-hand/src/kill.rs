@@ -415,7 +415,7 @@ fn abort_command(
         external_ui_prev_non_null: false,
         orphans_enumerated: orphans.len(),
         orphan_kill_attempts,
-        note: format!("command abort: kill_set={} pids, orphans_by_creation_window={} pids", kill_set.len(), orphan_pids.len()),
+note: format!("command abort: kill_set={} pids, orphans_by_creation_window={} pids, orphan_exe={}", kill_set.len(), orphan_pids.len(), exe_path),        note: format!("command abort: kill_set={} pids, orphans_by_creation_window={} pids", kill_set.len(), orphan_pids.len()),
     }
 }
 
