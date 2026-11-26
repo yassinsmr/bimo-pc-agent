@@ -110,7 +110,7 @@ fn run_slow_copy(data_dir: &Path, src: &str, dst: &str) -> i32 {
     let mut output = match fs::File::create(dst) {
         Ok(f) => f,
         Err(e) => {
-            eprintln!("slow-copy: create {}: {}", src, e);
+            eprintln!("slow-copy: create {}: {}", dst, e);
             return 1;
         }
     };
@@ -189,6 +189,9 @@ fn run_worker(data_dir: &Path, heartbeat_secs: u64) {
         &json!({"pid": std::process::id(), "ts": utc_now_secs()}),
     );
     let mut stale_warned = false;
+    // One beat per heartbeat interval (production 30 s, test 2 s); the
+    // control loop itself still polls every 250 ms.
+    let mut last_beat = Instant::now() - Duration::from_secs(heartbeat_secs + 1);
     loop {
         if data_dir.join("hand.worker-exit").exists()
             || data_dir.join("hand.supervisor-exit").exists()
@@ -208,8 +211,10 @@ fn run_worker(data_dir: &Path, heartbeat_secs: u64) {
         if ctl.stop_present() {
             let reason = ctl.stop_reason().unwrap_or_else(|| "hand.stop".to_string());
             let _ = ctl.apply_stop(&reason);
-        } else {
-            let _ = ctl.write_heartbeat();
+        } else if last_beat.elapsed() >= Duration::from_secs(heartbeat_secs) {
+            if ctl.write_heartbeat().unwrap_or(false) {
+                last_beat = Instant::now();
+            }
         }
         // Mutual monitoring: warn when the supervisor heartbeat goes
         // stale past 2 beats (once per stale episode).
