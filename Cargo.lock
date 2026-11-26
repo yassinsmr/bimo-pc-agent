@@ -30,6 +30,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bimo-hand"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "sha2",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "bimo-island"
 version = "0.1.0"
 dependencies = [
