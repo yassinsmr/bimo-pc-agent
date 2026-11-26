@@ -42,6 +42,7 @@ jobs:
         shell: pwsh
         run: |
           cargo build --release --target x86_64-pc-windows-msvc -p bimo-hand
+                    if ($LASTEXITCODE -ne 0) { exit 1 }
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Cargo.lock
