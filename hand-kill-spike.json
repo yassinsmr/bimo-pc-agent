@@ -1,0 +1,315 @@
+{
+  "base": "a0354f8",
+  "branch": "unit3-kill-spike-c39",
+  "c38_reference": {
+    "branch": "unit3-part4-c38",
+    "proof_8_1": {
+      "remaining_pids": [
+        4568
+      ],
+      "stop_ms": 5040,
+      "tree_dead": false
+    },
+    "proof_8_2": {
+      "stop_ms": 5047,
+      "tree_dead": false
+    },
+    "spike_results_head": "3a92c73"
+  },
+  "calibration": {
+    "exit_code": 0,
+    "install_duration_ms": 7039,
+    "installed_after": {
+      "present": true,
+      "product_code": "{9675011C-2395-4AD7-B1CC-92910F991F58}",
+      "product_name": "VLC media player",
+      "product_state": 5
+    },
+    "pre_absent": {
+      "product_absent": true,
+      "product_state": null,
+      "uninstall_return_code": null,
+      "waited_ms": 23
+    },
+    "timed_out": false,
+    "uninstall": {
+      "product_absent": true,
+      "product_state": null,
+      "uninstall_return_code": 0,
+      "waited_ms": 4869
+    }
+  },
+  "msi": {
+    "download": {
+      "method": "curl.exe",
+      "return_code": 0
+    },
+    "sha256_actual": "ce1fe655b7cd8e11a55dde25502f42e0bf0a9d3bc0556583b6a841fa37e88f02",
+    "sha256_expected": "ce1fe655b7cd8e11a55dde25502f42e0bf0a9d3bc0556583b6a841fa37e88f02",
+    "sha256_matches": true,
+    "size_bytes": 58949632,
+    "url": "https://get.videolan.org/vlc/3.0.20/win64/vlc-3.0.20-win64.msi"
+  },
+  "runner_note": "does not prove device performance",
+  "spike": "unit3-kill-spike-c39",
+  "stages": {
+    "stage0": {
+      "measured": {
+        "c38_reference": {
+          "proof": "8.1",
+          "remaining_pids": [
+            4568
+          ],
+          "stop_ms": 5040,
+          "tree_dead": false
+        },
+        "c38_remaining_pid": 4568,
+        "client_pid": 6944,
+        "client_tree_dead": true,
+        "installer_elevated": true,
+        "kill_fraction": 0.4,
+        "kill_ms_after_start": 2899,
+        "msi_idle_after": {
+          "msi_idle": false,
+          "msiexec_remaining": [
+            {
+              "exe_path": "C:\\Windows\\System32\\msiexec.exe",
+              "in_job": null,
+              "pid": 672,
+              "ppid": 936,
+              "session_id": 0,
+              "sid": "S-1-5-18",
+              "user": "SYSTEM"
+            }
+          ],
+          "mutex_free": true,
+          "waited_ms": 90296
+        },
+        "msi_sha256": "ce1fe655b7cd8e11a55dde25502f42e0bf0a9d3bc0556583b6a841fa37e88f02",
+        "msi_url": "https://get.videolan.org/vlc/3.0.20/win64/vlc-3.0.20-win64.msi",
+        "new_msiexec_processes": [],
+        "product_after": {
+          "presence": {
+            "present": true,
+            "product_code": "{9675011C-2395-4AD7-B1CC-92910F991F58}",
+            "product_name": "VLC media player",
+            "product_state": 5
+          },
+          "product_absent": false,
+          "waited_ms": 30179
+        },
+        "remaining_pids": [],
+        "service_msiexec": [],
+        "service_msiexec_survives": false,
+        "stop": {
+          "cooperative_ms": 1823,
+          "forced_ms": 0,
+          "job_sweep_error": 0,
+          "job_sweep_ok": null,
+          "method": "cooperative",
+          "remaining_pids": [],
+          "retry_attempted": false,
+          "retry_ms": 0,
+          "stop_ms": 1826,
+          "survivors": [],
+          "tree_dead": true,
+          "tree_kill": [],
+          "verify_ms": 3
+        },
+        "stop_method": "cooperative",
+        "stop_ms": 1826,
+        "supervisor_elevated": true,
+        "survivors": [],
+        "tree_at_kill": [
+          {
+            "exe_path": "C:\\Windows\\System32\\msiexec.exe",
+            "in_job": true,
+            "pid": 6944,
+            "ppid": 2228,
+            "session_id": 2,
+            "sid": "S-1-5-21-3414932011-3134797172-3625386099-500",
+            "user": "user"
+          }
+        ],
+        "tree_dead": true,
+        "tree_pids_at_kill": []
+      },
+      "stage": "stage0",
+      "status": "fail"
+    },
+    "stage1": {
+      "measured": {
+        "client_pid": 5336,
+        "client_tree_dead": true,
+        "installer_elevated": true,
+        "kill_fraction": 0.4,
+        "kill_ms_after_start": 2888,
+        "msi_idle_after": {
+          "msi_idle": false,
+          "msiexec_remaining": [
+            {
+              "exe_path": "C:\\Windows\\System32\\msiexec.exe",
+              "in_job": null,
+              "pid": 672,
+              "ppid": 936,
+              "session_id": 0,
+              "sid": "S-1-5-18",
+              "user": "SYSTEM"
+            }
+          ],
+          "mutex_free": true,
+          "waited_ms": 90327
+        },
+        "msi_sha256": "ce1fe655b7cd8e11a55dde25502f42e0bf0a9d3bc0556583b6a841fa37e88f02",
+        "msi_url": "https://get.videolan.org/vlc/3.0.20/win64/vlc-3.0.20-win64.msi",
+        "new_msiexec_processes": [],
+        "product_after": {
+          "presence": {
+            "present": true,
+            "product_code": "{9675011C-2395-4AD7-B1CC-92910F991F58}",
+            "product_name": "VLC media player",
+            "product_state": 5
+          },
+          "product_absent": false,
+          "waited_ms": 30179
+        },
+        "remaining_pids": [],
+        "service_msiexec": [],
+        "service_msiexec_survives": false,
+        "stop": {
+          "cooperative_ms": 1492,
+          "forced_ms": 0,
+          "job_sweep_error": 0,
+          "job_sweep_ok": null,
+          "method": "cooperative",
+          "remaining_pids": [],
+          "retry_attempted": false,
+          "retry_ms": 0,
+          "stop_ms": 1495,
+          "survivors": [],
+          "tree_dead": true,
+          "tree_kill": [],
+          "verify_ms": 2
+        },
+        "stop_method": "cooperative",
+        "stop_ms": 1495,
+        "supervisor_elevated": true,
+        "survivors": [],
+        "tree_at_kill": [
+          {
+            "exe_path": "C:\\Windows\\System32\\msiexec.exe",
+            "in_job": true,
+            "pid": 5336,
+            "ppid": 2228,
+            "session_id": 2,
+            "sid": "S-1-5-21-3414932011-3134797172-3625386099-500",
+            "user": "user"
+          }
+        ],
+        "tree_dead": true,
+        "tree_pids_at_kill": []
+      },
+      "stage": "stage1",
+      "status": "pass"
+    },
+    "stage2": {
+      "measured": {
+        "cancel_after_ms": 2815,
+        "cancel_ms": 842,
+        "cancel_requested": true,
+        "install_attempt_total_ms": 3657,
+        "msi_return_code": 1602,
+        "msi_return_code_is_user_exit_1602": true,
+        "msi_sha256": "ce1fe655b7cd8e11a55dde25502f42e0bf0a9d3bc0556583b6a841fa37e88f02",
+        "msi_url": "https://get.videolan.org/vlc/3.0.20/win64/vlc-3.0.20-win64.msi",
+        "mutex_global_msi_execute_free": true,
+        "new_msiexec_processes": [],
+        "no_service_msiexec_for_product": true,
+        "product_absent": true,
+        "product_presence": {
+          "present": false,
+          "product_code": null,
+          "product_name": null,
+          "product_state": null
+        },
+        "service_idle": true,
+        "service_msiexec_for_product": [],
+        "service_msiexec_idle_remaining": [
+          {
+            "exe_path": "C:\\Windows\\System32\\msiexec.exe",
+            "in_job": null,
+            "pid": 672,
+            "ppid": 936,
+            "session_id": 0,
+            "sid": "S-1-5-18",
+            "user": "SYSTEM"
+          }
+        ],
+        "service_query": {
+          "query": "\r\nSERVICE_NAME: msiserver \r\n        TYPE               : 10  WIN32_OWN_PROCESS  \r\n        STATE              : 4  RUNNING \r\n                                (STOPPABLE, NOT_PAUSABLE, ACCEPTS_SHUTDOWN)\r\n        WIN32_EXIT_CODE    : 0  (0x0)\r\n        SERVICE_EXIT_CODE  : 0  (0x0)\r\n        CHECKPOINT         : 0x0\r\n        WAIT_HINT          : 0x0\r\n",
+          "queryex": "\r\nSERVICE_NAME: msiserver \r\n        TYPE               : 10  WIN32_OWN_PROCESS  \r\n        STATE              : 4  RUNNING \r\n                                (STOPPABLE, NOT_PAUSABLE, ACCEPTS_SHUTDOWN)\r\n        WIN32_EXIT_CODE    : 0  (0x0)\r\n        SERVICE_EXIT_CODE  : 0  (0x0)\r\n        CHECKPOINT         : 0x0\r\n        WAIT_HINT          : 0x0\r\n        PID                : 672\r\n        FLAGS              : \r\n",
+          "service_pid": 672,
+          "state_line": "STATE              : 4  RUNNING"
+        },
+        "settled_ms": 13,
+        "ui_handler_calls": 8099
+      },
+      "stage": "stage2",
+      "status": "pass"
+    },
+    "stage3": {
+      "measured": {
+        "create_source_ms": 6160,
+        "file_size_bytes": 1073741824,
+        "partial_cleaned": true,
+        "partial_file_existed": true,
+        "partial_size_bytes": 269484032,
+        "progress_pct_at_kill": 25.09765625,
+        "remaining_pids": [],
+        "root_pid": 9060,
+        "source_size_bytes": 1073741824,
+        "stop": {
+          "cooperative_ms": 55,
+          "forced_ms": 0,
+          "job_sweep_error": 0,
+          "job_sweep_ok": null,
+          "method": "cooperative",
+          "remaining_pids": [],
+          "retry_attempted": false,
+          "retry_ms": 0,
+          "stop_ms": 60,
+          "survivors": [],
+          "tree_dead": true,
+          "tree_kill": [],
+          "verify_ms": 4
+        },
+        "stop_method": "cooperative",
+        "stop_ms": 60,
+        "supervisor_elevated": true,
+        "survivors": [],
+        "tree_at_kill": [
+          {
+            "exe_path": "D:\\a\\bimo-pc-agent\\bimo-pc-agent\\target\\x86_64-pc-windows-msvc\\release\\bimo-hand-kill-spike.exe",
+            "in_job": true,
+            "pid": 9060,
+            "ppid": 2228,
+            "session_id": 2,
+            "sid": "S-1-5-21-3414932011-3134797172-3625386099-500",
+            "user": "user"
+          }
+        ],
+        "tree_dead": true,
+        "tree_pids_at_kill": []
+      },
+      "stage": "stage3",
+      "status": "pass"
+    }
+  },
+  "stop_ms_by_kind": {
+    "install_old": 1826,
+    "install_tree": 1495,
+    "msi_cancel": 842,
+    "transfer_tree": 60
+  },
+  "supervisor_elevated": true
+}
