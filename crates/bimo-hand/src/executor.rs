@@ -28,7 +28,6 @@ use crate::queue::{is_expired, Command};
 use crate::{read_json_file, utc_now_secs, write_json_file};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -147,7 +146,6 @@ pub fn check_download_limits(
 /// platforms it is `None` (the pure `disk_space_ok` check is unit-tested).
 #[cfg(windows)]
 pub fn free_space_bytes(path: &Path) -> Option<u64> {
-    use windows::Win32::Foundation::ULARGE_INTEGER;
     use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
     use windows::core::PCWSTR;
     let wide: Vec<u16> = path
@@ -156,17 +154,16 @@ pub fn free_space_bytes(path: &Path) -> Option<u64> {
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect();
-    let mut free = ULARGE_INTEGER::default();
-    let ok = unsafe {
-        GetDiskFreeSpaceExW(
+    let mut free: u64 = 0;
+    let ok = unsafe { GetDiskFreeSpaceExW(
             PCWSTR(wide.as_ptr()),
-            Some(&mut free as *mut ULARGE_INTEGER),
+            Some(&mut free as *mut u64),
             None,
             None,
-        )
+        ).is_ok()
     };
-    if ok.as_bool() {
-        Some(unsafe { free.QuadPart })
+    if ok {
+        Some(free)
     } else {
         None
     }
@@ -325,6 +322,7 @@ mod tests {
     use super::*;
     use crate::queue::new_command;
     use serde_json::json;
+    use std::fs;
 
     #[test]
     fn disk_space_rule_adds_the_margin() {
