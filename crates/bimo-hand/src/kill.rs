@@ -114,6 +114,15 @@ pub enum AbortTarget {
         install_dir: Option<String>,
     },
 }
+/// One attempt to terminate a WMI orphan process: the PID, whether
+/// TerminateProcess succeeded, and the Win32 last error (0 = success).
+#[derive(Clone, Copy, Debug)]
+pub struct OrphanKillAttempt {
+    pub pid: u32,
+    pub ok: bool,
+    pub last_error: u32,
+}
+
 
 /// Outcome of a single `abort` call, in the unified JSON timing schema.
 /// For MSI, `forced_ms` is explicitly the rollback wait.
@@ -137,6 +146,11 @@ pub struct AbortOutcome {
     pub leftovers_empty: Option<bool>,
     pub stop_unconfirmed: bool,
     pub ui_calls: u64,
+    pub handler_first_ms: u64,
+    pub internal_ui_prev: u32,
+    pub external_ui_prev_non_null: bool,
+    pub orphans_enumerated: usize,
+    pub orphan_kill_attempts: Vec<OrphanKillAttempt>,
     pub note: String,
 }
 
@@ -162,10 +176,16 @@ impl AbortOutcome {
             "leftovers_empty": self.leftovers_empty,
             "stop_unconfirmed": self.stop_unconfirmed,
             "ui_calls": self.ui_calls,
+            "handler_first_ms": self.handler_first_ms,
+            "internal_ui_prev": self.internal_ui_prev,
+            "external_ui_prev_non_null": self.external_ui_prev_non_null,
+            "orphans_enumerated": self.orphans_enumerated,
+            "orphan_kill_attempts": self.orphan_kill_attempts.iter().map(|a| json!({"pid": a.pid, "ok": a.ok, "last_error": a.last_error})).collect::<Vec<_>>(),
             "note": self.note,
         })
     }
 }
+
 
 fn proc_json(p: &win32::Proc) -> Value {
     p.to_json()
@@ -232,6 +252,10 @@ fn abort_msi(
         Some(ref o) => (Some(o.return_code), o.cancel_ms, o.handler_calls),
         None => (None, stop_ms, 0),
     };
+    let (handler_first_ms, internal_ui_prev, external_ui_prev_non_null) = match &got {
+        Some(o) => (o.handler_first_ms, o.internal_ui_prev, o.external_ui_prev_non_null),
+            None => (0, 0, false),
+    };
     // (3) Verify restoration to the pre-command state.
     let presence = msi::product_presence_by_name(&name_substring);
     let product_absent = presence.get("present").and_then(|v| v.as_bool()).map(|b| !b);
@@ -284,6 +308,11 @@ fn abort_msi(
         service_idle: Some(service_idle),
         leftovers_empty: Some(leftovers_empty),
         stop_unconfirmed,
+        handler_first_ms,
+        internal_ui_prev,
+        external_ui_prev_non_null,
+        orphans_enumerated: 0,
+        orphan_kill_attempts: Vec::new(),
         ui_calls: handler_calls,
         note: format!("msi cancel via IDCANCEL; handler_calls={}; stop-unconfirmed means the queue must stay blocked until Global_MSI_Execute is free and the supervisor records a final result", handler_calls),
     }
@@ -322,9 +351,12 @@ fn abort_command(
     let window_end = SystemTime::now();
     let orphans = win32::processes_by_exe_and_window(&exe_path, window_start, window_end);
     let mut orphan_pids: Vec<u32> = Vec::new();
+    let mut orphan_kill_attempts: Vec<OrphanKillAttempt> = Vec::new();
     for o in &orphans {
         if !kill_set.contains(&o.pid) && win32::alive(o.pid) {
-            win32::terminate_pid(o.pid);
+            let ok = win32::terminate_pid(o.pid);
+            let last_error = if ok { 0 } else { std::io::Error::last_os_error().raw_os_error().unwrap_or(0) as u32 };
+            orphan_kill_attempts.push(OrphanKillAttempt { pid: o.pid, ok, last_error });
             orphan_pids.push(o.pid);
         }
     }
@@ -375,6 +407,11 @@ fn abort_command(
         leftovers_empty: None,
         stop_unconfirmed,
         ui_calls: 0,
+        handler_first_ms: 0,
+        internal_ui_prev: 0,
+        external_ui_prev_non_null: false,
+        orphans_enumerated: orphans.len(),
+        orphan_kill_attempts,
         note: format!("command abort: kill_set={} pids, orphans_by_creation_window={} pids", kill_set.len(), orphan_pids.len()),
     }
 }
