@@ -33,6 +33,8 @@ pub const PROCESS_TERMINATE: u32 = 0x0001;
 pub const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
 pub const SYNCHRONIZE: u32 = 0x00100000;
 pub const TOKEN_QUERY: u32 = 0x0008;
+pub const TOKEN_ADJUST_PRIVILEGES: u32 = 0x0020;
+pub const SE_PRIVILEGE_ENABLED: u32 = 0x00000002;
 pub const TOKEN_USER_CLASS: u32 = 1;
 pub const TOKEN_ELEVATION_CLASS: u32 = 20;
 pub const CTRL_BREAK_EVENT: u32 = 1;
@@ -161,6 +163,27 @@ struct SidAndAttributes {
 struct TokenUser {
   user: SidAndAttributes,
 }
+// LUID and privilege list for AdjustTokenPrivileges (SeDebugPrivilege).
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct Luid {
+  low_part: u32,
+  high_part: i32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct LuidAndAttributes {
+  luid: Luid,
+  attributes: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct TokenPrivileges {
+  privilege_count: u32,
+  privileges: [LuidAndAttributes; 1],
+}
+
 
 #[link(name = "kernel32")]
 extern "system" {
@@ -185,6 +208,7 @@ extern "system" {
   fn GenerateConsoleCtrlEvent(event: u32, group: u32) -> i32;
   fn OpenMutexW(access: u32, inherit: i32, name: *const u16) -> Handle;
   fn LocalFree(mem: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+  fn GetCurrentProcess() -> Handle;
 }
 
 #[link(name = "advapi32")]
@@ -192,6 +216,8 @@ extern "system" {
   fn OpenProcessToken(process: Handle, access: u32, token: *mut Handle) -> i32;
   fn GetTokenInformation(token: Handle, cls: u32, info: *mut std::ffi::c_void, len: u32, ret_len: *mut u32) -> i32;
   fn ConvertSidToStringSidW(sid: *const std::ffi::c_void, out: *mut *mut u16) -> i32;
+  fn LookupPrivilegeValueW(system: *const u16, name: *const u16, luid: *mut Luid) -> i32;
+  fn AdjustTokenPrivileges(token: Handle, disable_all: i32, new_state: *mut TokenPrivileges, len: u32, prev: *mut std::ffi::c_void, ret_len: *mut u32) -> i32;
 }
 
 fn last_error() -> u32 {
@@ -470,16 +496,53 @@ pub fn services_pid() -> Option<u32> {
     .map(|(pid, _, _)| pid)
 }
 
-pub fn terminate_pid(pid: u32) -> bool {
+/// Enable SeDebugPrivilege for this process (best effort). WMI-spawned
+/// processes may run under a different token, so OpenProcess can fail
+/// with access denied (5) without it. Returns true when the privilege
+/// is actually enabled (AdjustTokenPrivileges can succeed yet report
+/// ERROR_NOT_ALL_ASSIGNED via the last error).
+pub fn enable_debug_privilege() -> bool {
+  unsafe {
+    let mut token: Handle = NULL_HANDLE;
+    let opened = OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_ADJUST_PRIVILEGES, &mut token) != 0;
+    if !opened || token.is_null() {
+      return false;
+    }
+    let mut luid = Luid::default();
+    let name = wide("SeDebugPrivilege");
+    if LookupPrivilegeValueW(std::ptr::null(), name.as_ptr(), &mut luid) == 0 {
+      close_handle(token);
+      return false;
+    }
+    let mut tp = TokenPrivileges {
+      privilege_count: 1,
+      privileges: [LuidAndAttributes { luid, attributes: SE_PRIVILEGE_ENABLED }],
+    };
+    let mut ret_len: u32 = 0;
+    let adjusted = AdjustTokenPrivileges(token, 0, &mut tp, std::mem::size_of::<TokenPrivileges>() as u32, null_mut(), &mut ret_len) != 0;
+    let err = last_error();
+    close_handle(token);
+    adjusted && err == 0
+  }
+}
+/// TerminateProcess by PID, returning (success, Win32 last error).
+/// The error code (0 on success) is what makes an orphan kill
+/// observable: 5 = access denied, 87 = invalid parameter.
+pub fn terminate_pid_with_error(pid: u32) -> (bool, u32) {
   unsafe {
     let proc = OpenProcess(PROCESS_TERMINATE, 0, pid);
     if proc.is_null() {
-      return false;
+      return (false, last_error());
     }
     let ok = TerminateProcess(proc, 1) != 0;
+    let err = if ok { 0 } else { last_error() };
     CloseHandle(proc);
-    ok
+    (ok, err)
   }
+}
+
+pub fn terminate_pid(pid: u32) -> bool {
+    terminate_pid_with_error(pid).0
 }
 
 pub fn terminate_job(job: Handle) -> (bool, u32) {
