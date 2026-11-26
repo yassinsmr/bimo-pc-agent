@@ -1,0 +1,44 @@
+# سير عمل مؤقت (SPIKE) — يُحذف بعد إثبات مهلة join في stop().
+# يبني ثنائي join_timeout_spike ويشغله مع BIMO_EYE_HANG_CONTROL=1،
+# ثم يرفع ملف JSON للنتيجة وسجل وحدة التحكم كقطع أثرية.
+name: eye-join-timeout-spike
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "crates/bimo-eye/src/bin/join_timeout_spike.rs"
+      - "crates/bimo-eye/src/control.rs"
+      - "crates/bimo-eye/src/eye.rs"
+      - ".github/workflows/eye-join-timeout-spike.yml"
+permissions:
+  contents: read
+jobs:
+  join-timeout-spike:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      BIMO_EYE_HANG_CONTROL: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust (stable + MSVC target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Build join_timeout_spike (release)
+        run: cargo build --release --target x86_64-pc-windows-msvc --locked -p bimo-eye --bin join_timeout_spike
+      - name: Run join timeout spike (control hangs; stop must time out)
+        run: .\target\x86_64-pc-windows-msvc\release\join_timeout_spike.exe --out join-timeout-spike.json --log join-timeout-spike.log
+      - name: Show spike result and log tail
+        if: always()
+        run: |
+          Get-Content join-timeout-spike.json -ErrorAction SilentlyContinue
+          Get-Content join-timeout-spike.log -Tail 60 -ErrorAction SilentlyContinue
+      - name: Upload spike result and log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eye-join-timeout-spike
+          path: |
+            join-timeout-spike.json
+            join-timeout-spike.log
+          retention-days: 30
