@@ -107,8 +107,7 @@ mod imp {
     use windows::Win32::System::JobObjects::{
         CreateJobObjectW, IsProcessInJob, JobObjectExtendedLimitInformation,
         SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JOBOBJECT_LIMIT_FLAGS, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
     use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
     use windows::Win32::System::Threading::{
@@ -255,7 +254,7 @@ mod imp {
             let mut code: u32 = 0;
             let ok = GetExitCodeProcess(handle, &mut code).is_ok();
             let _ = CloseHandle(handle);
-            ok && code == STILL_ACTIVE.0
+            ok && code == STILL_ACTIVE
         }
     }
 
@@ -265,7 +264,7 @@ mod imp {
             let mut code: u32 = 0;
             let ok = GetExitCodeProcess(handle, &mut code).is_ok();
             let _ = CloseHandle(handle);
-            if ok && code != STILL_ACTIVE.0 {
+            if ok && code != STILL_ACTIVE {
                 Some(code)
             } else {
                 None
