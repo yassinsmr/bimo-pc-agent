@@ -72,9 +72,8 @@ jobs:
         run: |
           cargo test --release --target x86_64-pc-windows-msvc --locked -p bimo-shot -p bimo-eye --features bimo-eye/eye-shots
       - name: اختبار انحدار مهلة join (join_timeout)
-              timeout-minutes: 10
-                      run: cargo test -p bimo-eye join_timeout
-                      
+        timeout-minutes: 10
+        run: cargo test -p bimo-eye join_timeout
       - name: Shot unit self-test plus aggregate measurement
         continue-on-error: true
         timeout-minutes: 15
