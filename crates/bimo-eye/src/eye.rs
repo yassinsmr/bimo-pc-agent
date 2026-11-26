@@ -487,6 +487,19 @@ mod tests {
         assert_eq!(c.load(Ordering::Relaxed), 0);
         assert!(take_gap_event(&c, "x").is_none());
     }
+    // اختبار انحدار: join_timeout يعود خلال المهلة رغم تعليق الخيط للأبد
+    #[test]
+    fn join_timeout_returns_within_timeout_for_parked_thread() {
+        let handle = std::thread::spawn(|| loop {
+            std::thread::park();
+        });
+        let started = std::time::Instant::now();
+        join_timeout(handle, "parked-test");
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed.as_secs_f64() >= 9.0 && elapsed.as_secs_f64() <= 15.0,
+            "join_timeout took {elapsed:?}, expected 9s..=15s");
+    }
 }
 
 /// Join a thread with a 10 s safety net (fallback (ج), cycle 35):

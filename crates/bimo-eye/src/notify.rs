@@ -66,6 +66,14 @@ pub fn show_toast(data_dir: &std::path::Path, text: &str) -> Result<(), String> 
     r
 }
 
+// تشخيص الخطأ 0x80070490: CreateToastNotifier() من دون وسيط يتطلب AppUserModelID مسجلا لدى المتصل.
+// وملف تنفيذي مكتبي غير معبأ يشغل مباشرة (كما على عداء CI) لا يملك واحدا،
+// فيفشل بالخطأ 0x80070490 "Element not found". هذا ظرف بيئي على العداء،
+// وليس خللا في XML التنبيه أو محتواه. اتجاه الإصلاح في يوم الوصول: ينشئ المثبت
+// اختصارا في قائمة Start يحمل System.AppUserModel.ID، ويتحول الكود إلى CreateToastNotifier(appID) بنفس المعرف.
+// الدليل: سجل eye-self-test-shots.json من التشغيل رقم 28: toast attempted: ok=false,
+// error='CreateToastNotifier: Element not found. (0x80070490)'. وتوثق Microsoft Learn
+// أن التحميل من دون وسيط يرمي الاستثناء من دون AppUserModelID صالح، وأنه يجب عدم استخدامه لتطبيقات سطح المكتب.
 #[cfg(windows)]
 fn show_toast_inner(text: &str) -> Result<(), String> {
     use windows::core::HSTRING;
