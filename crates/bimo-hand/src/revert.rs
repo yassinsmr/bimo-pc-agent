@@ -16,7 +16,7 @@
 
 use crate::queue::Command;
 use crate::{alert_event, file_sha256, utc_now_secs, write_json_file};
-use serde_json::{json, Value};
+use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
 
