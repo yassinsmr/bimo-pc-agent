@@ -23,10 +23,10 @@
 //!   acknowledgement, not a claim that PPID covers COM.
 //!
 //! Budgets (design allocation, not measurement-derived limits): the
-/!! 2000/1000/500 ms split is a design allocation re-set in cycle 42
-/!! from measured samples -- MSI cancel n = 4: 842 spike, 1514 run 14,
-/!! 1082 run 19 phase B, 293 run 19 8.9 (max 1514); tree kill <= 119
-/!! run 19, 60 spike; verify <= 36 run 19. The empty 1500 ms is the
+//! 2000/1000/500 ms split is a design allocation re-set in cycle 42
+//! from measured samples -- MSI cancel n = 4: 842 spike, 1514 run 14,
+//! 1082 run 19 phase B, 293 run 19 8.9 (max 1514); tree kill <= 119
+//! run 19, 60 spike; verify <= 36 run 19. The empty 1500 ms is the
 //! monitoring reserve (`POST_CAP_MONITOR_MS`).
 //!
 //! Success (v2 condition 1) is restoration to the pre-command state:
