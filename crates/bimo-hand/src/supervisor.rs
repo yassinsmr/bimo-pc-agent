@@ -97,8 +97,11 @@ impl Drop for Job {
 #[cfg(windows)]
 mod imp {
     use super::*;
-    use windows::Win32::Foundation::{BOOL, CloseHandle, HANDLE};
-    use windows::Win32::Security::{GetTokenInformation, OpenProcessToken, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+    // Win32 ABI constants (windows 0.62 does not export these).
+    const STILL_ACTIVE: u32 = 259;
+    const WAIT_OBJECT_0: u32 = 0;
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
     use windows::Win32::System::Console::{GenerateConsoleCtrlEvent, CTRL_BREAK_EVENT};
     use windows::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
@@ -115,10 +118,10 @@ mod imp {
         InitializeProcThreadAttributeList, OpenProcess, UpdateProcThreadAttribute,
         WaitForSingleObject, CREATE_NEW_PROCESS_GROUP, CREATE_UNICODE_ENVIRONMENT,
         EXTENDED_STARTUPINFO_PRESENT, PROCESS_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
-        PROC_THREAD_ATTRIBUTE_JOB_LIST, STARTUPINFOEXW, STARTUPINFOW, STILL_ACTIVE,
-        WAIT_OBJECT_0,
+        PROC_THREAD_ATTRIBUTE_JOB_LIST, STARTUPINFOEXW, STARTUPINFOW,
     };
-    use windows::core::{PCWSTR, PWSTR};
+        use windows::Win32::System::Threading::{LPPROC_THREAD_ATTRIBUTE_LIST, OpenProcessToken};
+    use windows::core::{BOOL, PCWSTR, PWSTR};
 
     pub fn create_job() -> Result<Job, String> {
         unsafe {
@@ -178,7 +181,7 @@ mod imp {
                     cb: std::mem::size_of::<STARTUPINFOEXW>() as u32,
                     ..Default::default()
                 },
-                lpAttributeList: attr_list,
+                lpAttributeList: LPPROC_THREAD_ATTRIBUTE_LIST(attr_list),
             };
             let mut command_line: Vec<u16> = {
                 let mut parts = vec![quote_arg(program)];
@@ -195,7 +198,7 @@ mod imp {
             let mut pi = PROCESS_INFORMATION::default();
             let result = CreateProcessW(
                 PCWSTR::null(),
-                PWSTR(command_line.as_mut_ptr()),
+                Some(PWSTR(command_line.as_mut_ptr())),
                 None,
                 None,
                 BOOL(0),
@@ -208,7 +211,7 @@ mod imp {
                 &si_ex.StartupInfo as *const STARTUPINFOW,
                 &mut pi,
             );
-            let _ = DeleteProcThreadAttributeList(attr_list);
+            let _ = DeleteProcThreadAttributeList(LPPROC_THREAD_ATTRIBUTE_LIST(attr_list));
             let _ = CloseHandle(pi.hThread);
             result.map_err(|e| format!("CreateProcessW failed for {}: {}", program, e))?;
             Ok(LaunchedProcess {
@@ -225,7 +228,7 @@ mod imp {
                 Err(_) => return false,
             };
             let mut in_job = BOOL(0);
-            let ok = IsProcessInJob(handle, job.handle, &mut in_job).is_ok();
+        let ok = IsProcessInJob(handle, Some(job.handle), &mut in_job).is_ok();
             let _ = CloseHandle(handle);
             ok && in_job.as_bool()
         }
@@ -234,7 +237,7 @@ mod imp {
     pub fn job_process_count(job: &Job) -> usize {
         snapshot_pids()
             .iter()
-            .filter(|pid| is_process_in_job(*pid, job))
+            .filter(|pid| is_process_in_job(**pid, job))
             .count()
     }
 
