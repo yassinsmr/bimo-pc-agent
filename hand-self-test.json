@@ -3,36 +3,39 @@
     "cpu_note": "not measured on the runner",
     "cpu_percent": null,
     "queue_size": 9,
-    "ram_available_mb": 13547,
+    "ram_available_mb": 13491,
     "ram_total_mb": 16378,
     "revert_failed_correctly": 1,
     "revert_success_rate": 1.0,
     "reverts_expected_success": 1,
     "reverts_succeeded": 1,
     "stop_ms_by_kind": {
-      "install": 1091,
-      "probe_grandchild": 74,
-      "transfer": 119
+      "install": 1571,
+      "probe_grandchild": 77,
+      "transfer": 228
     }
   },
   "proofs": {
     "8.1": {
       "measured": {
-        "budget_note": "1000/2000/500 is a design allocation grounded on single samples only (MSI cancel 842 ms, tree kill 60 ms, verify 2-4 ms; n=1, runner only), not a measurement-derived limit; the empty 1500 ms is the post-interim-cap monitoring reserve.",
+        "budget_note": "2000/1000/500 re-set in cycle 42 from measured samples (MSI cancel n=4: 842 spike, 1514 run 14, 1082 run 19 phase B, 293 run 19 8.9; max 1514; tree kill <=119 run 19, 60 spike; verify <=36 run 19), not a measurement-derived limit; the empty 1500 ms is the post-interim-cap monitoring reserve",
         "budgets_ms": {
           "hard_cap": 5000,
-          "msi_cancel": 1000,
+          "msi_cancel": 2000,
           "post_cap_monitor": 1500,
-          "tree_kill": 2000,
+          "tree_kill": 1000,
           "verify": 500
         },
-        "cancel_ms": 1082,
+        "cancel_ms": 1543,
+        "external_ui_prev_non_null": false,
+        "firefox_excluded": "pre-installed in the runner image: C\\Program Files\\Mozilla Firefox already contained firefox.exe before install (runs 14 and 19); 8.1 is proven by VLC only",
+        "handler_first_ms": 9,
         "installers": [
           {
             "installer": "vlc",
             "name_substring": "VLC media player",
             "phase_a": {
-              "install_duration_ms": 9728,
+              "install_duration_ms": 11719,
               "pre_command_state": {
                 "msi_execute_mutex_free": true,
                 "product_state": null,
@@ -50,157 +53,48 @@
               "uninstall_return_code": 0
             },
             "phase_b": {
-              "cancel_ms": 1082,
-              "forced_ms": 1082,
-              "kill_ms_after_start": 3891,
+              "cancel_ms": 1543,
+              "external_ui_prev_non_null": false,
+              "forced_ms": 1543,
+              "handler_first_ms": 9,
+              "internal_ui_prev": 1,
+              "kill_ms_after_start": 4687,
               "mutex_free": true,
               "product_absent": true,
               "result_status": "stopped",
               "return_code": 1602,
               "service_idle": true,
               "status": "pass",
-              "stop_ms": 1091,
+              "stop_ms": 1571,
               "survivors": [],
               "target_folder_empty": true,
               "tree_dead": true,
               "trigger": "hand.stop",
-              "ui_calls": 0
+              "ui_calls": 8882
             },
             "product_code": "{9675011C-2395-4AD7-B1CC-92910F991F58}",
             "product_version": null,
             "sha256": "ce1fe655b7cd8e11a55dde25502f42e0bf0a9d3bc0556583b6a841fa37e88f02"
-          },
-          {
-            "installer": "firefox",
-            "name_substring": "Mozilla Firefox",
-            "phase_a": {
-              "install_duration_ms": 16920,
-              "pre_command_state": {
-                "msi_execute_mutex_free": true,
-                "product_state": null,
-                "target_dir": "C:\\Program Files\\Mozilla Firefox",
-                "target_folder_listing": {
-                  "entries": [
-                    "AccessibleMarshal.dll",
-                    "CoreMessagingXP.dll",
-                    "InstallationDirLayout.dll",
-                    "Microsoft.InputStateManager.dll",
-                    "Microsoft.Internal.FrameworkUdk.dll",
-                    "Microsoft.UI.Composition.OSSupport.dll",
-                    "Microsoft.UI.Input.dll",
-                    "Microsoft.UI.Windowing.Core.dll",
-                    "Microsoft.UI.Windowing.dll",
-                    "Microsoft.WindowsAppRuntime.Insights.Resource.dll",
-                    "Microsoft.WindowsAppRuntime.dll",
-                    "application.ini",
-                    "browser",
-                    "crashhelper.exe",
-                    "crashreporter.exe",
-                    "default-browser-agent.exe",
-                    "defaults",
-                    "dependentlibs.list",
-                    "desktop-launcher",
-                    "dxcompiler.dll",
-                    "firefox.VisualElementsManifest.xml",
-                    "firefox.exe",
-                    "firefox.exe.sig",
-                    "fonts",
-                    "freebl3.dll",
-                    "gkcodecs.dll",
-                    "gmp-clearkey",
-                    "install.log",
-                    "installation_dir_layout",
-                    "installation_telemetry.json",
-                    "lgpllibs.dll",
-                    "libEGL.dll",
-                    "libGLESv2.dll",
-                    "maintenanceservice.exe",
-                    "maintenanceservice_installer.exe",
-                    "marshal.dll",
-                    "mozavcodec.dll",
-                    "mozavutil.dll",
-                    "mozglue.dll",
-                    "mozilla.cfg",
-                    "mozinference.dll",
-                    "mozwer.dll",
-                    "msixcomserver.dll",
-                    "msvcp140.dll",
-                    "msvcp140_atomic_wait.dll",
-                    "nmhproxy.exe",
-                    "notification-helper.exe",
-                    "notificationserver.dll",
-                    "nss3.dll",
-                    "omni.ja",
-                    "onnxruntime.dll",
-                    "pingsender.exe",
-                    "platform.ini",
-                    "plugin-container.exe",
-                    "plugin-container.exe.sig",
-                    "postSigningData",
-                    "precomplete",
-                    "private_browsing.VisualElementsManifest.xml",
-                    "private_browsing.exe",
-                    "removed-files",
-                    "softokn3.dll",
-                    "uninstall",
-                    "update-settings.ini",
-                    "updater.exe",
-                    "updater.ini",
-                    "vcruntime140.dll",
-                    "vcruntime140_1.dll",
-                    "wmfclearkey.dll",
-                    "xul.dll",
-                    "xul.dll.sig"
-                  ],
-                  "exists": true,
-                  "is_empty": false
-                }
-              },
-              "product_absent_after_removal": false,
-              "return_code": 0,
-              "status": "inconclusive",
-              "target_folder_empty_after_removal": false,
-              "uninstall_return_code": null
-            },
-            "phase_b": {
-              "cancel_ms": 0,
-              "forced_ms": 0,
-              "kill_ms_after_start": 6768,
-              "mutex_free": true,
-              "product_absent": true,
-              "result_status": "",
-              "return_code": null,
-              "service_idle": true,
-              "status": "inconclusive",
-              "stop_ms": 0,
-              "survivors": [],
-              "target_folder_empty": false,
-              "tree_dead": false,
-              "trigger": "hand.stop",
-              "ui_calls": 0
-            },
-            "product_code": null,
-            "product_version": null,
-            "sha256": "f874ec50ef37df111db89c20b2662a94dce23b0e6e4bb160f2978cf8fa1813cd"
           }
         ],
+        "internal_ui_prev": 1,
         "spike_reference": "unit3-kill-spike-c39 stage2: return 1602, cancel_ms 842, handler_calls 8099",
         "stop_ms_by_kind": {
-          "install_tree": 1091,
-          "msi_cancel": 1082,
-          "transfer_tree": 119
+          "install_tree": 1571,
+          "msi_cancel": 1543,
+          "transfer_tree": 228
         },
-        "ui_calls": 0
+        "ui_calls": 8882
       },
-      "status": "inconclusive"
+      "status": "pass"
     },
     "8.10a": {
       "measured": {
-        "fake_size_bytes": 30229905408,
-        "free_bytes": 29156163584,
+        "fake_size_bytes": 27684212736,
+        "free_bytes": 26610470912,
         "nothing_written": true,
         "prepare_error": "disk-space",
-        "required_bytes": 33252895948,
+        "required_bytes": 30452634009,
         "state_failed_disk_space": true,
         "target_exists": false
       },
@@ -231,10 +125,10 @@
         "no_corrupt_file_presented_as_complete": true,
         "partial_cleaned": true,
         "partial_file_gone": true,
-        "progress_pct_at_kill": 25.390625,
+        "progress_pct_at_kill": 25.78125,
         "status": "stopped",
         "stop_method": "stopped",
-        "stop_ms": 119,
+        "stop_ms": 228,
         "tree_dead": true
       },
       "status": "pass"
@@ -243,14 +137,41 @@
       "measured": {
         "survivor": {
           "exec_result": {
-            "duration_ms": 531,
+            "abort": {
+              "cooperative_ms": 6,
+              "external_ui_prev_non_null": false,
+              "forced_ms": 9,
+              "handler_first_ms": 0,
+              "handles_released": true,
+              "installer_kind": "command",
+              "internal_ui_prev": 0,
+              "leftovers_empty": null,
+              "mutex_free": null,
+              "note": "command abort: kill_set=1 pids, orphans_by_creation_window=0 pids",
+              "orphan_kill_attempts": [],
+              "orphans_enumerated": 0,
+              "product_absent": null,
+              "product_state": null,
+              "remaining_pids": [],
+              "return_code": null,
+              "service_idle": null,
+              "status": "stopped",
+              "stop_ms": 34,
+              "stop_unconfirmed": false,
+              "survivors": [],
+              "tree_dead": true,
+              "trigger": "hand.stop",
+              "ui_calls": 0,
+              "verify_ms": 14
+            },
+            "duration_ms": 448,
             "handles_released": true,
             "installer_elevated": true,
             "partial_cleaned": true,
             "remaining_pids": [],
             "status": "stopped",
             "stop_method": "stopped",
-            "stop_ms": 22,
+            "stop_ms": 34,
             "supervisor_elevated": true,
             "tree_dead": true
           },
@@ -260,11 +181,11 @@
           "orphan_gone_by_window": false,
           "orphan_in_ppid_tree": false,
           "orphan_parent_is_wmiprvse": true,
-          "orphan_pid": 1484,
-          "orphan_ppid": 7396,
+          "orphan_pid": 3972,
+          "orphan_ppid": 5004,
           "orphan_ppid_exe": "C:\\Windows\\System32\\wbem\\WmiPrvSE.exe",
           "ppid_enumeration_does_not_cover_wmi_com": true,
-          "root_pid": 8724
+          "root_pid": 7632
         }
       },
       "status": "fail"
@@ -292,10 +213,10 @@
     "8.5": {
       "measured": {
         "grandchild_in_job": true,
-        "grandchild_pid": 8928,
+        "grandchild_pid": 8336,
         "job_process_count": 4,
         "job_process_limit": 32,
-        "stop_ms": 74
+        "stop_ms": 77
       },
       "status": "pass"
     },
@@ -323,8 +244,8 @@
         "heartbeat_returned": true,
         "missed_beats_reached": true,
         "new_commands_refused_while_deadman": true,
-        "new_worker_pid": 4440,
-        "old_worker_pid": 4520,
+        "new_worker_pid": 1520,
+        "old_worker_pid": 672,
         "restart_recorded": true,
         "stopped_written": true,
         "worker_restarted": true
@@ -336,31 +257,31 @@
         "abort": {
           "cooperative_ms": 0,
           "external_ui_prev_non_null": false,
-          "forced_ms": 293,
+          "forced_ms": 525,
           "handler_first_ms": 5,
           "handles_released": true,
           "installer_kind": "msi",
           "internal_ui_prev": 1,
           "leftovers_empty": true,
           "mutex_free": true,
-          "note": "msi cancel via IDCANCEL; handler_calls=6418; stop-unconfirmed means the queue must stay blocked until Global_MSI_Execute is free and the supervisor records a final result",
+          "note": "msi cancel via IDCANCEL; handler_calls=7171; stop-unconfirmed means the queue must stay blocked until Global_MSI_Execute is free and the supervisor records a final result",
           "orphan_kill_attempts": [],
           "orphans_enumerated": 0,
           "product_absent": true,
           "product_state": null,
           "remaining_pids": [
-            3420
+            7312
           ],
           "return_code": 1602,
           "service_idle": true,
           "status": "stopped",
-          "stop_ms": 305,
+          "stop_ms": 532,
           "stop_unconfirmed": false,
           "survivors": [],
           "tree_dead": true,
           "trigger": "ttl",
-          "ui_calls": 6418,
-          "verify_ms": 36
+          "ui_calls": 7171,
+          "verify_ms": 32
         },
         "mutex_free": true,
         "pre_command_state": {
@@ -380,7 +301,7 @@
       "status": "pass"
     }
   },
-  "red_line": "not-tested",
+  "red_line": "met",
   "runner_note": "does not prove device performance",
   "verdict": "fail"
 }
