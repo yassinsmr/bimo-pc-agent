@@ -585,6 +585,7 @@ fn handle_request(
                 },
                 trigger_from_reason(&reason),
             );
+            let abort_json = abort_outcome.to_json();
             let outcome = sup::StopOutcome {
                 method: abort_outcome.status,
                 stop_ms: abort_outcome.stop_ms,
@@ -610,7 +611,7 @@ fn handle_request(
                     "remaining_pids": outcome.remaining_pids,
                     "handles_released": outcome.handles_released,
                     "partial_cleaned": partial_cleaned,
-                    "abort": abort_outcome.to_json(),
+"abort": abort_json,
                     "supervisor_elevated": supervisor_elevated,
                     "installer_elevated": installer_elevated,
                     "duration_ms": started_at.elapsed().as_millis() as u64,
