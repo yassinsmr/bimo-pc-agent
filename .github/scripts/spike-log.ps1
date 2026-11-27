@@ -152,6 +152,53 @@ function Get-PulseStats {
   return $stats
 }
 
+# ---------------------------------------------------------------------------
+# Liveness snapshot (council 16, cycle 59, run (a)).
+#
+# One liveness read inside the LIVE step: log lines + last log ts,
+# heartbeat age, eye alive (from the held Process object — no
+# Get-Process-by-pid race inside the step), control alive the same
+# way, last control pulse. Returns a hashtable with the same shape
+# the run-4 D2/D4 snapshots wrote to diag-liveness-*.json, so D7
+# verdict logic reads it identically. Never throws: on any read
+# failure the affected field is $null and the snapshot still returns.
+# ---------------------------------------------------------------------------
+function Get-Liveness {
+  param(
+    [string]$At,
+    [DateTimeOffset]$StepStart,
+    $EyeProc,
+    $ControlProc
+  )
+  $logPath = "$env:EYE_DATA\eye-events.jsonl"
+  $lines = 0; $lastTs = $null
+  try {
+    $raw = Get-Content $logPath -ErrorAction SilentlyContinue
+    $lines = @($raw).Count
+    if ($lines -gt 0) { $lastTs = ($raw[-1] | ConvertFrom-Json -ErrorAction SilentlyContinue).ts }
+  } catch {}
+  $hbAge = $null
+  $hb = "$env:EYE_DATA\heartbeat.json"
+  try {
+    if (Test-Path $hb) {
+      $ts = (Get-Content $hb -Raw | ConvertFrom-Json).ts
+      $hbAge = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($ts)).TotalSeconds
+    }
+  } catch {}
+  $checkTs = [DateTimeOffset]::UtcNow
+  $alive = $false
+  if ($null -ne $EyeProc) { $alive = -not $EyeProc.HasExited }
+  $controlAlive = $false
+  if ($null -ne $ControlProc) { $controlAlive = -not $ControlProc.HasExited }
+  $lastControlPulse = Get-LastPulse -Path "$env:DIAG_DIR\control-pulse.log"
+  return @{
+    at = $At; step_start_ts = $StepStart.ToString("o"); check_ts = $checkTs.ToString("o")
+    log_lines = $lines; last_ts = $lastTs; heartbeat_age_secs = $hbAge
+    process_alive = $alive; control_alive = $controlAlive
+    last_control_pulse_ts = $(if ($null -ne $lastControlPulse) { $lastControlPulse.ToString("o") } else { $null })
+  }
+}
+
 # F3/F4 (council fix, run 2): the LOUD readability probe. Unlike
 # Read-EyeLog (a polling helper that silently returns @() while the
 # file is still appearing), this throws when the log file is missing
