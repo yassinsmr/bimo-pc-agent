@@ -1,0 +1,125 @@
+{
+  "diag_id": "diag-46024758395",
+  "run_id": "46024758395",
+  "defender": {
+    "defender_realtime_protection": false
+  },
+  "eye_pid": 8700,
+  "runner_note": "does not prove device performance",
+  "live_cycle": {
+    "control_pid": 1488,
+    "step_start_ts": "2026-11-27T15:26:56.5566084+00:00",
+    "final": {
+      "log_lines": 181,
+      "eye_stopped_file": true,
+      "writer_exit_trace": "[eye] writer_loop exit: channel closed (all producers dropped)",
+      "has_agent_stop": true,
+      "heartbeat_ts": null,
+      "eye_last_alive_ts": "2026-11-27T15:27:20+00:00",
+      "control_pulse_count": 67,
+      "heartbeat_age_secs": null,
+      "control_last_pulse_ts": "2026-11-27T15:27:30.3591298+00:00",
+      "control_pulse_max_gap_secs": 0.562,
+      "last_ts": "2026-11-27T15:27:20Z"
+    },
+    "arm_ts": "2026-11-27T15:26:56.7123529+00:00",
+    "diag_id": "diag-46024758395",
+    "eye_pid": 8700,
+    "eye_launch_ts": "2026-11-27T15:26:56.6381004+00:00",
+    "phases": {
+      "liveness_15s": {
+        "log_lines": 163,
+        "step_start_ts": "2026-11-27T15:26:56.7189357+00:00",
+        "at": "15s",
+        "last_control_pulse_ts": "2026-11-27T15:27:11.7215742+00:00",
+        "process_alive": true,
+        "control_alive": true,
+        "heartbeat_age_secs": 0.7370162,
+        "check_ts": "2026-11-27T15:27:11.7371988+00:00",
+        "last_ts": "2026-11-27T15:27:11Z"
+      },
+      "control_closeout": {
+        "control_has_exited": false,
+        "control_exited": false,
+        "control_exit_ts": null,
+        "control_exit_code": null
+      },
+      "stop": {
+        "eye_killed_by_stop": false,
+        "eye_exited_on_stop": true,
+        "step_start_ts": "2026-11-27T15:27:19.4306678+00:00",
+        "eye_alive_before_stop": true,
+        "eye_exit_code": 0,
+        "eye_has_exited": true,
+        "eye_exit_ts": "2026-11-27T15:27:20.7122591+00:00",
+        "stop_requested_ts": "2026-11-27T15:27:19.4307989+00:00"
+      },
+      "probes": {
+        "step_start_ts": "2026-11-27T15:27:11.7816948+00:00",
+        "probe_sub_seen": true,
+        "probe_root": "C:\\bimo-slice\\diag-probe-root-diag-46024758395.exe",
+        "probe_sub": "C:\\bimo-slice\\diag-probe-sub-diag-46024758395\\probe.exe",
+        "log_encrypted": false,
+        "probe_root_seen": true
+      },
+      "arm": {
+        "arm_ts": "2026-11-27T15:26:56.7123529+00:00",
+        "eye_alive_at_arm": true,
+        "armed": true,
+        "control_alive_at_arm": true
+      },
+      "liveness_30s": {
+        "log_lines": 179,
+        "step_start_ts": "2026-11-27T15:27:14.4187497+00:00",
+        "at": "30s",
+        "last_control_pulse_ts": "2026-11-27T15:27:19.2733924+00:00",
+        "process_alive": true,
+        "control_alive": true,
+        "heartbeat_age_secs": 1.4265255,
+        "check_ts": "2026-11-27T15:27:19.4266044+00:00",
+        "last_ts": "2026-11-27T15:27:18Z"
+      }
+    },
+    "step_end_ts": "2026-11-27T15:27:30.7312428+00:00",
+    "armed": true,
+    "control_launch_ts": "2026-11-27T15:26:56.661368+00:00"
+  },
+  "verdict": "diagnosed-eye-lived-full-cycle",
+  "eye_exit": {
+    "exited_on_stop": true,
+    "exit_code": 0,
+    "killed_by_stop": false,
+    "natural": true
+  },
+  "control": {
+    "survived": true,
+    "launch_ts": "2026-11-27T15:26:56.661368+00:00",
+    "pulse_secs": 40,
+    "died_early": false,
+    "heartbeat_secs": 1,
+    "mode": "pulse-loop-500ms",
+    "exit_code": null,
+    "pid": 1488,
+    "lifetime_secs": null
+  },
+  "eventlog": {
+    "entries": [],
+    "window_start": "2026-11-27T15:26:51+00:00",
+    "queried": true,
+    "count": 0,
+    "note": null,
+    "window_end": "2026-11-27T15:27:43.7393702+00:00"
+  },
+  "run_kind": "a-live-step-test",
+  "arm_ts": "2026-11-27T15:26:56.7123529+00:00",
+  "m5_note": "does not prove eye survival outside a live step nor device performance",
+  "run": 5,
+  "signature": "diagnosed-eye-lived-full-cycle",
+  "council": 16,
+  "reasons": [
+    "FIRST POSITIVE CONTROL: eye alive at 30 s with fresh heartbeat (1.4265255 s), both probes sensed, agent.stop present, exit code 0 captured from the live step's Process object (A3 satisfied)",
+    "the lifecycle hypothesis is CONFIRMED: the eye survives a full cycle inside a step that never ends — (a) becomes the fix candidate for council 17",
+    "control survived its 40 s pulse loop (lifetime unknown s, exit code ): the launch environment is healthy inside a live step"
+  ],
+  "armed": true
+}
