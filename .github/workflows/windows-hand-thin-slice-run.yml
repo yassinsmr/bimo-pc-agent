@@ -39,6 +39,22 @@
 # authorized; no run 6 without a new council if run 5 fails in S1
 # with the same signature, and (b) is the declared next candidate.
 #
+# S1 FIX (cycle 63, council 20, conditions H1–H5): run 5 proved the
+# GPG fix (Home: /c/gpg-home, keyserver attempt 1, npp import ok) and
+# failed at a NEW point — step (4): $inst.Database($msi, 0) threw
+# "[System.__ComObject] does not contain a method named 'Database'".
+# Council 20 verdict (a): replace the COM block with direct P/Invoke
+# calls to Msi* from msi.dll (MsiOpenDatabase / MsiDatabaseOpenView /
+# MsiViewExecute / MsiViewFetch / MsiRecordGetString), workflow only
+# (H1); the proof is S1 itself succeeding with a real ProductCode read
+# (H2 — success without a real read is (b) in disguise); run 6 alone
+# is authorized, no run 7 without a new council if run 6 fails at the
+# same point, and (b) (drop COM from S1) is the declared next candidate
+# (H3); P/Invoke is the NAMED candidate, 5.1 is a diagnostic fallback
+# only by a later council decision, never a first plan (H4); the COM
+# failure mechanism stays open (H5). S1.6/S6/S7 ProductState calls are
+# NOT touched — outside the named block.
+#
 # Execution order note: the spec numbers S4 (witness), S5 (shot),
 # S6 (strong evidence) in that order, but S4's window needs s6_ts
 # (written by S6) and S5 runs after S6 (§29.3). The live step
@@ -74,14 +90,16 @@
 
 name: windows-hand-thin-slice-run
 
-# NOTE (cycle 62): `workflow_dispatch` ONLY. The temporary `push`
-# trigger was removed after slice run 5 fired (run 46048653326).
+# NOTE (cycle 63): temporary `push` trigger added to fire slice run 6
+# (council 20, H3); removed right after ignition, as in cycles 60–62.
 # GitHub's web UI lists workflows from the default branch only, and
 # this file lives on hand-thin-slice-c50 — so it cannot be dispatched
 # from the UI, and no API token exists on this machine (gh is not
 # logged in; the GitHub connector returns 403).
 on:
   workflow_dispatch:
+  push:
+    branches: [hand-thin-slice-c50]
 
 permissions:
   contents: write
@@ -143,7 +161,7 @@ jobs:
           $budget = @(
             @{ item = "arm + S0c probe"; secs = 90 }
             @{ item = "S1 fetch (5 x curl --max-time 120)"; secs = 600 }
-            @{ item = "S1 GPG + Authenticode + COM"; secs = 120 }
+            @{ item = "S1 GPG + Authenticode + P/Invoke"; secs = 120 }
             @{ item = "Phase 1 install (S2+S3)"; secs = 600 }
             @{ item = "S6 + S4 + S5"; secs = 180 }
             @{ item = "S7 revert"; secs = 600 }
@@ -343,15 +361,64 @@ jobs:
             # (3) Authenticode at runtime.
             $sig = Get-AuthenticodeSignature $msi
             if ($sig.Status -ne "Valid" -or $sig.SignerCertificate.Subject -notmatch "NOTEPAD\+\+") { Fail "S1 fail: unsigned-msi (Authenticode: $($sig.Status))" }
-            # (4) COM read of ProductCode/UpgradeCode (§35.4) + winget cross-check (§35.5).
-            $inst = New-Object -ComObject WindowsInstaller.Installer
-            $db = $inst.Database($msi, 0)
+            # (4) P/Invoke read of ProductCode/UpgradeCode (§35.4) + winget cross-check (§35.5).
+            # Council 20, H1/H4 (cycle 63): COM (WindowsInstaller.Installer +
+            # $inst.Database($msi, 0)) failed in run 5 with
+            # "[System.__ComObject] does not contain a method named 'Database'"
+            # — mechanism unknown (H5: three hypotheses on equal footing),
+            # so COM is bypassed entirely via direct Msi* calls from msi.dll.
+            # No here-string: the C# source is an array of single-quoted
+            # lines (a here-string terminator cannot sit at column 0
+            # inside a YAML literal block).
+            $msiCs = @(
+              'using System;',
+              'using System.Runtime.InteropServices;',
+              'using System.Text;',
+              'public static class MsiNative {',
+              '  [DllImport("msi.dll", CharSet = CharSet.Unicode)]',
+              '  public static extern uint MsiOpenDatabase(string szDatabasePath, IntPtr phPersist, out IntPtr phDatabase);',
+              '  [DllImport("msi.dll", CharSet = CharSet.Unicode)]',
+              '  public static extern uint MsiDatabaseOpenView(IntPtr hDatabase, string szQuery, out IntPtr phView);',
+              '  [DllImport("msi.dll")]',
+              '  public static extern uint MsiViewExecute(IntPtr hView, IntPtr hRecord);',
+              '  [DllImport("msi.dll")]',
+              '  public static extern uint MsiViewFetch(IntPtr hView, out IntPtr phRecord);',
+              '  [DllImport("msi.dll", CharSet = CharSet.Unicode)]',
+              '  public static extern uint MsiRecordGetString(IntPtr hRecord, uint iField, StringBuilder szValueBuf, ref uint pcchValueBuf);',
+              '  [DllImport("msi.dll")]',
+              '  public static extern uint MsiCloseHandle(IntPtr hAny);',
+              '}'
+            )
+            Add-Type -TypeDefinition ($msiCs -join "`n")
             function Get-MsiProp($name) {
-              $v = $db.OpenView("SELECT Value FROM Property WHERE Property = '$name'")
-              $v.Execute()
-              $r = $v.Fetch()
-              if ($null -eq $r) { return $null }
-              return $r.StringData(1)
+              $hDb = [IntPtr]::Zero; $hView = [IntPtr]::Zero; $hRec = [IntPtr]::Zero
+              try {
+                # phPersist = NULL = MSIDBOPEN_READONLY.
+                $rc = [MsiNative]::MsiOpenDatabase($msi, [IntPtr]::Zero, [ref]$hDb)
+                if ($rc -ne 0) { throw "MsiOpenDatabase failed (rc=$rc)" }
+                $rc = [MsiNative]::MsiDatabaseOpenView($hDb, "SELECT Value FROM Property WHERE Property = '$name'", [ref]$hView)
+                if ($rc -ne 0) { throw "MsiDatabaseOpenView failed for $name (rc=$rc)" }
+                $rc = [MsiNative]::MsiViewExecute($hView, [IntPtr]::Zero)
+                if ($rc -ne 0) { throw "MsiViewExecute failed for $name (rc=$rc)" }
+                $rc = [MsiNative]::MsiViewFetch($hView, [ref]$hRec)
+                if ($rc -eq 259) { return $null }
+                if ($rc -ne 0) { throw "MsiViewFetch failed for $name (rc=$rc)" }
+                $len = [uint]1024
+                $sb = New-Object System.Text.StringBuilder 1024
+                $rc = [MsiNative]::MsiRecordGetString($hRec, 1, $sb, [ref]$len)
+                if ($rc -eq 234) {
+                  $sb = New-Object System.Text.StringBuilder ([int]$len)
+                  $rc = [MsiNative]::MsiRecordGetString($hRec, 1, $sb, [ref]$len)
+                }
+                if ($rc -ne 0) { throw "MsiRecordGetString failed for $name (rc=$rc)" }
+                return $sb.ToString()
+              } catch {
+                Fail "S1 fail: msi-pinvoke-read failed for $name ($($_.Exception.Message))"
+              } finally {
+                if ($hRec -ne [IntPtr]::Zero) { [void][MsiNative]::MsiCloseHandle($hRec) }
+                if ($hView -ne [IntPtr]::Zero) { [void][MsiNative]::MsiCloseHandle($hView) }
+                if ($hDb -ne [IntPtr]::Zero) { [void][MsiNative]::MsiCloseHandle($hDb) }
+              }
             }
             $code = Get-MsiProp "ProductCode"
             $upcode = Get-MsiProp "UpgradeCode"
