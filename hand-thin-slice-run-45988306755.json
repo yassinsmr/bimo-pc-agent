@@ -1,0 +1,34 @@
+{
+  "reasons": [
+    "hand-slice-missing (probe-timeout-unsettled signature: no hand-slice.json)",
+    "shot-missing (R6)"
+  ],
+  "s1_note": "four checks passed in the S1 step (hash, GPG, Authenticode, winget)",
+  "verdict": "fail",
+  "shot_check": null,
+  "slice_inputs": null,
+  "slice_window": {
+    "install_location_expected": "C:\\bimo-slice\\Notepad++",
+    "arm_ts": "2026-11-27T11:12:41.9608751+00:00",
+    "msi_sha256": "e3b0607a092ce2604fbdac027db2c94915995e8e568ebd226f8c5493c2f61a80",
+    "probe_prefix": "C:\\bimo-slice\\bimo-slice-probe-slice-45988306755",
+    "product_code": null,
+    "s6_ts": null,
+    "window_end_ts": null,
+    "product_dir_expected": "C:\\bimo-slice\\Notepad++",
+    "slice_id": "slice-45988306755",
+    "s3_ts": null
+  },
+  "run_id": "45988306755",
+  "slice_id": "slice-45988306755",
+  "hand_slice": null,
+  "s6": null,
+  "eye_witness": null,
+  "runner_note": "does not prove device performance",
+  "s7": {
+    "status": "skipped",
+    "reason": "s3-not-succeeded",
+    "revert": null,
+    "clean": null
+  }
+}
