@@ -354,6 +354,23 @@ mod tests {
     use crate::queue::new_command;
     use serde_json::json;
     use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    // Unique per call: parallel tests share one process, so a fixed
+    // temp directory name collides and one test deletes another's
+    // directory mid-test (run 34: install_outside_allowed_msi_class_
+    // needs_approval failed with file_not_found at the guardian check).
+    // Same pattern as control.rs / queue.rs.
+    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn test_dir() -> PathBuf {
+        let n = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("bimo-hand-exec-test-{}-{}", std::process::id(), n));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 
     #[test]
     fn disk_space_rule_adds_the_margin() {
@@ -391,8 +408,7 @@ mod tests {
 
     #[test]
     fn organize_without_approval_needs_approval() {
-        let dir = std::env::temp_dir().join("bimo-hand-exec-test");
-        let _ = fs::create_dir_all(&dir);
+        let dir = test_dir();
         let mut config = HandConfig::default();
         config.exec_enabled = true;
         config.data_dir = dir.clone();
@@ -404,8 +420,7 @@ mod tests {
     }
     #[test]
 fn install_outside_allowed_msi_class_needs_approval() {
-    let dir = std::env::temp_dir().join("bimo-hand-exec-test");
-    let _ = fs::create_dir_all(&dir);
+    let dir = test_dir();
     let msi_path = dir.join("example.msi");
     let _ = fs::write(&msi_path, b"dummy");
     let mut config = HandConfig::default();
