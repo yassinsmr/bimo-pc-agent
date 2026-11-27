@@ -1,60 +1,72 @@
 {
+  "ts": "2026-11-27T09:05:39.1106998+00:00",
+  "missing_fragments": [],
+  "L1": {
+    "msiexec_exit": 0,
+    "extracted_files": 218,
+    "outcome": "applicable",
+    "detail": "msiexec /a exit 0, 218 files extracted under deny-write lock",
+    "trial": "L1"
+  },
+  "verdict": "fail",
   "thresholds": {
-    "T1": {
-      "threshold": "T1",
-      "probe": "C:\\Program Files\\bimo-slice-probe-spike-45966533500\\probe.exe",
-      "detected_ms": null,
-      "status": "fail",
-      "completed_ms": null,
-      "limit_ms": 10000
-    },
     "T6": {
-      "exit_code": 0,
       "status": "pass",
+      "exit_code": 0,
       "threshold": "T6"
     },
+    "T4": {
+      "threshold": "T4",
+      "gpg": "C:\\Program Files\\Git\\usr\\bin\\gpg.exe",
+      "status": "pass"
+    },
     "T2": {
-      "noise_count": 0,
-      "limit": 50,
-      "status": "pass",
+      "threshold": "T2",
       "window_secs": 60,
-      "threshold": "T2"
+      "limit": 50,
+      "noise_count": null,
+      "reason": "log-unreadable",
+      "status": "fail"
+    },
+    "T1": {
+      "threshold": "T1",
+      "detected_ms": null,
+      "completed_ms": null,
+      "limit_ms": 10000,
+      "reason": "log-unreadable",
+      "status": "fail"
     },
     "T5": {
       "threshold": "T5",
-      "status": "recorded",
-      "elevated": true
-    },
-    "T4": {
-      "gpg": "C:\\Program Files\\Git\\usr\\bin\\gpg.exe",
-      "threshold": "T4",
-      "status": "pass"
+      "elevated": true,
+      "status": "recorded"
     },
     "T3": {
+      "threshold": "T3",
       "renamed_ms": null,
       "limit_ms": 30000,
-      "status": "fail",
-      "threshold": "T3",
-      "first_seen": false
+      "first_seen": false,
+      "reason": "log-unreadable",
+      "status": "fail"
     }
   },
-  "L1": {
-    "trial": "L1",
-    "detail": "msiexec /a exit 0, 218 files extracted under deny-write lock",
-    "extracted_files": 218,
-    "msiexec_exit": 0,
-    "outcome": "applicable"
-  },
-  "ts": "2026-11-27T08:36:41.1721225+00:00",
-  "eye": {
-    "stop": null
-  },
-  "verdict": "fail",
   "notes": [
     "runner numbers do not prove device performance (flawhunt 11-z)",
     "no Defender check runs in this spike (realtime was off on the runner in the eye spike)",
     "no real fullscreen game on the runner; the fullscreen-overlay gate is decided on the Legion (second gate)"
   ],
-  "run_id": "45966533500",
-  "missing_fragments": []
+  "run_id": "45970575502",
+  "eye": {
+    "stop": "already-gone",
+    "probes": {
+      "f2_alive": true,
+      "f3_status": "fail",
+      "f2_status": "pass",
+      "f3_has_agent_start": false,
+      "f3_log_path": "D:\\a\\_temp\\bimo-spike\\eye-data\\eye-events.jsonl",
+      "f3_total_lines": 0,
+      "f3_json_lines": 0,
+      "f2_heartbeat_age_secs": 1
+    }
+  }
 }
