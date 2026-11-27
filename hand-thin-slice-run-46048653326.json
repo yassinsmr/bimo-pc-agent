@@ -1,0 +1,129 @@
+{
+  "s1_note": "S1 did not complete (slice-inputs.json missing)",
+  "reasons": [
+    "live-step-phase-error: Method invocation failed because [System.__ComObject] does not contain a method named 'Database'.",
+    "hand-slice-missing (phase 1 never ran — failure before the install phase)",
+    "shot-missing (R6)"
+  ],
+  "timeout_check": {
+    "job_timeout_secs": 2700,
+    "worst_case_secs": 2370.0,
+    "fits": true,
+    "budget": [
+      {
+        "secs": 90,
+        "item": "arm + S0c probe"
+      },
+      {
+        "secs": 600,
+        "item": "S1 fetch (5 x curl --max-time 120)"
+      },
+      {
+        "secs": 120,
+        "item": "S1 GPG + Authenticode + COM"
+      },
+      {
+        "secs": 600,
+        "item": "Phase 1 install (S2+S3)"
+      },
+      {
+        "secs": 180,
+        "item": "S6 + S4 + S5"
+      },
+      {
+        "secs": 600,
+        "item": "S7 revert"
+      },
+      {
+        "secs": 180,
+        "item": "stop eye + S8 assemble/publish"
+      }
+    ],
+    "margin_secs": 330.0,
+    "live_step_timeout_minutes": 40
+  },
+  "restructure_note": "single-live-step restructure built on one unreplicated positive control (diagnostic run (a)); a slice-3 success must not be read back as proof that run (a) replicates",
+  "hand_slice": null,
+  "runner_note": "does not prove device performance",
+  "slice_inputs": null,
+  "eye_witness": null,
+  "shot_check": null,
+  "verdict": "fail",
+  "s1_gpg": {
+    "gpg_version_first_line": "gpg (GnuPG) 2.4.9",
+    "npp_import_stderr": "gpg: key 6C429F1D8D84F46E: 56 signatures not checked due to missing keys\r\ngpg: key 6C429F1D8D84F46E: \"Notepad++ <don.h@free.fr>\" not changed\r\ngpg: Total number processed: 1\r\ngpg:              unchanged: 1\r\n",
+    "keyserver_import_attempt": 1,
+    "mechanism_note": "F3: a success after a retry does not close the S1 mechanism question — it stays open and carried in the log",
+    "keyserver_import_stderr_attempts": [
+      "gpg: keybox '/c/gpg-home/pubring.kbx' created\r\ngpg: key 6C429F1D8D84F46E: 74 signatures not checked due to missing keys\r\ngpg: /c/gpg-home/trustdb.gpg: trustdb created\r\ngpg: key 6C429F1D8D84F46E: public key \"Notepad++ <don.h@free.fr>\" imported\r\ngpg: Total number processed: 1\r\ngpg:               imported: 1\r\ngpg: no ultimately trusted keys found\r\n"
+    ],
+    "gnupghome": "/c/gpg-home"
+  },
+  "s7": {
+    "revert": null,
+    "reason": "s3-not-succeeded",
+    "clean": null,
+    "status": "skipped"
+  },
+  "slice_window": {
+    "product_code": null,
+    "s6_ts": null,
+    "probe_prefix": "C:\\bimo-slice\\bimo-slice-probe-slice-46048653326",
+    "slice_id": "slice-46048653326",
+    "msi_sha256": "e3b0607a092ce2604fbdac027db2c94915995e8e568ebd226f8c5493c2f61a80",
+    "arm_ts": "2026-11-27T18:22:36.5591197+00:00",
+    "s3_ts": null,
+    "window_end_ts": null,
+    "product_dir_expected": "C:\\bimo-slice\\Notepad++",
+    "install_location_expected": "C:\\bimo-slice\\Notepad++"
+  },
+  "m5_note": "does not prove eye survival outside a live step nor device performance",
+  "slice_id": "slice-46048653326",
+  "checkpoints": [
+    {
+      "ts": "2026-11-27T18:22:35.6128319+00:00",
+      "phase": "S0",
+      "note": "enter"
+    },
+    {
+      "ts": "2026-11-27T18:22:36.0135633+00:00",
+      "phase": "S0b",
+      "note": "enter"
+    },
+    {
+      "ts": "2026-11-27T18:22:36.5690124+00:00",
+      "phase": "S0c",
+      "note": "enter"
+    },
+    {
+      "ts": "2026-11-27T18:22:38.7380740+00:00",
+      "phase": "S1",
+      "note": "enter"
+    },
+    {
+      "ts": "2026-11-27T18:22:43.1689255+00:00",
+      "phase": "S7",
+      "note": "enter-finally"
+    },
+    {
+      "ts": "2026-11-27T18:22:43.1710670+00:00",
+      "phase": "StopEye",
+      "note": "enter-finally"
+    },
+    {
+      "ts": "2026-11-27T18:22:44.0979265+00:00",
+      "phase": "S8",
+      "note": "enter-finally"
+    }
+  ],
+  "run_id": "46048653326",
+  "eye_exit": {
+    "exited_on_stop": true,
+    "killed_by_stop": false,
+    "alive_before_stop": true,
+    "lifetime": "8.1 s",
+    "pid": 3520,
+    "exit_code": 0
+  },
+  "s6": null
+}
