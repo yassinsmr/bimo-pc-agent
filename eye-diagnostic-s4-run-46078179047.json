@@ -1,0 +1,248 @@
+{
+  "run_kind": "s4-diagnostic",
+  "control": {
+    "lifetime_secs": 80.0,
+    "launch_ts": "2026-11-27T22:43:06.6586091+00:00",
+    "heartbeat_secs": 1,
+    "mode": "pulse-loop-500ms",
+    "exit_code": 0,
+    "died_early": false,
+    "pulse_secs": 40,
+    "survived": true,
+    "pid": 7580
+  },
+  "eventlog": {
+    "window_start": "2026-11-27T22:43:01+00:00",
+    "queried": true,
+    "count": 0,
+    "window_end": "2026-11-27T22:44:30.8545271+00:00",
+    "note": null,
+    "entries": []
+  },
+  "defender": {
+    "defender_realtime_protection": false
+  },
+  "run": 1,
+  "run_id": "46078179047",
+  "raw_tap": {
+    "tap_started": true,
+    "heartbeats": 33,
+    "lines": 2093,
+    "flood_lines": 0,
+    "raw_events": 1536,
+    "shadow_decisions": 523,
+    "last_heartbeat_ts": "2026-11-27T22:44:26Z",
+    "flood_texts": [],
+    "present": true
+  },
+  "eye_pid": 6400,
+  "axes": {
+    "b": {
+      "files": 10,
+      "counts": {
+        "pattern": "drip-b-*.bin",
+        "raw_missing_count": 0,
+        "raw_seen": 10,
+        "on_disk": 10,
+        "dir": "C:\\bimo-slice\\axis-drip-b",
+        "eye_missing_count": 0,
+        "eye_seen": 10,
+        "shadow_decided": 10
+      },
+      "dir": "C:\\bimo-slice\\axis-drip-b",
+      "end_ts": "2026-11-27T22:44:01.7239855+00:00",
+      "start_ts": "2026-11-27T22:43:34.6585058+00:00",
+      "seconds": 27.1
+    },
+    "a": {
+      "files": 250,
+      "counts": {
+        "pattern": "burst-a-*.bin",
+        "raw_missing_count": 0,
+        "raw_seen": 250,
+        "on_disk": 250,
+        "dir": "C:\\bimo-slice\\axis-burst-a",
+        "eye_missing_count": 0,
+        "eye_seen": 250,
+        "shadow_decided": 250
+      },
+      "dir": "C:\\bimo-slice\\axis-burst-a",
+      "end_ts": "2026-11-27T22:43:22.0040847+00:00",
+      "start_ts": "2026-11-27T22:43:21.7971939+00:00",
+      "rate_per_sec": 1208.4,
+      "seconds": 0.207
+    },
+    "c": {
+      "counts": {
+        "pattern": "sys-c-*.bin",
+        "raw_missing_count": 0,
+        "raw_seen": 250,
+        "on_disk": 250,
+        "dir": "C:\\bimo-slice\\axis-sys-c",
+        "eye_missing_count": 0,
+        "eye_seen": 250,
+        "shadow_decided": 250
+      },
+      "writer": "NT AUTHORITY\\SYSTEM",
+      "marker_found": true,
+      "task_create_ok": true,
+      "task_create_out": "SUCCESS: The scheduled task \"BimoSysBurst\" has successfully been created.",
+      "task_run_out": "SUCCESS: Attempted to run the scheduled task \"BimoSysBurst\".",
+      "task_run_ok": true,
+      "write_seconds": 0.234
+    }
+  },
+  "m5_note": "does not prove eye survival outside a live step nor device performance",
+  "armed": true,
+  "verdict": "diagnosed-s4-burst-seen",
+  "live_cycle": {
+    "arm_ts": "2026-11-27T22:43:06.7117786+00:00",
+    "raw_tap": {
+      "tap_started": true,
+      "heartbeats": 33,
+      "lines": 2093,
+      "flood_lines": 0,
+      "raw_events": 1536,
+      "shadow_decisions": 523,
+      "last_heartbeat_ts": "2026-11-27T22:44:26Z",
+      "flood_texts": [],
+      "present": true
+    },
+    "control_launch_ts": "2026-11-27T22:43:06.6586091+00:00",
+    "phases": {
+      "axis_a": {
+        "files": 250,
+        "counts": {
+          "pattern": "burst-a-*.bin",
+          "raw_missing_count": 0,
+          "raw_seen": 250,
+          "on_disk": 250,
+          "dir": "C:\\bimo-slice\\axis-burst-a",
+          "eye_missing_count": 0,
+          "eye_seen": 250,
+          "shadow_decided": 250
+        },
+        "dir": "C:\\bimo-slice\\axis-burst-a",
+        "end_ts": "2026-11-27T22:43:22.0040847+00:00",
+        "start_ts": "2026-11-27T22:43:21.7971939+00:00",
+        "rate_per_sec": 1208.4,
+        "seconds": 0.207
+      },
+      "axis_b": {
+        "files": 10,
+        "counts": {
+          "pattern": "drip-b-*.bin",
+          "raw_missing_count": 0,
+          "raw_seen": 10,
+          "on_disk": 10,
+          "dir": "C:\\bimo-slice\\axis-drip-b",
+          "eye_missing_count": 0,
+          "eye_seen": 10,
+          "shadow_decided": 10
+        },
+        "dir": "C:\\bimo-slice\\axis-drip-b",
+        "end_ts": "2026-11-27T22:44:01.7239855+00:00",
+        "start_ts": "2026-11-27T22:43:34.6585058+00:00",
+        "seconds": 27.1
+      },
+      "control_closeout": {
+        "control_has_exited": true,
+        "control_exited": true,
+        "control_exit_code": 0,
+        "control_exit_ts": "2026-11-27T22:44:26.7340131+00:00"
+      },
+      "liveness_15s": {
+        "last_control_pulse_ts": "2026-11-27T22:43:21.2858684+00:00",
+        "at": "15s",
+        "heartbeat_age_secs": 0.7431548,
+        "check_ts": "2026-11-27T22:43:21.7432646+00:00",
+        "step_start_ts": "2026-11-27T22:43:06.7172771+00:00",
+        "process_alive": true,
+        "last_ts": "2026-11-27T22:43:21Z",
+        "control_alive": true,
+        "log_lines": 168
+      },
+      "arm": {
+        "armed": true,
+        "control_alive_at_arm": true,
+        "eye_alive_at_arm": true,
+        "arm_ts": "2026-11-27T22:43:06.7117786+00:00"
+      },
+      "stop": {
+        "eye_has_exited": true,
+        "eye_alive_before_stop": true,
+        "step_start_ts": "2026-11-27T22:44:25.4957355+00:00",
+        "eye_exited_on_stop": true,
+        "stop_requested_ts": "2026-11-27T22:44:25.4957856+00:00",
+        "eye_killed_by_stop": false,
+        "eye_exit_ts": "2026-11-27T22:44:26.7324464+00:00",
+        "eye_exit_code": 0
+      },
+      "axis_c": {
+        "counts": {
+          "pattern": "sys-c-*.bin",
+          "raw_missing_count": 0,
+          "raw_seen": 250,
+          "on_disk": 250,
+          "dir": "C:\\bimo-slice\\axis-sys-c",
+          "eye_missing_count": 0,
+          "eye_seen": 250,
+          "shadow_decided": 250
+        },
+        "writer": "NT AUTHORITY\\SYSTEM",
+        "marker_found": true,
+        "task_create_ok": true,
+        "task_create_out": "SUCCESS: The scheduled task \"BimoSysBurst\" has successfully been created.",
+        "task_run_out": "SUCCESS: Attempted to run the scheduled task \"BimoSysBurst\".",
+        "task_run_ok": true,
+        "write_seconds": 0.234
+      },
+      "liveness_end": {
+        "last_control_pulse_ts": "2026-11-27T22:43:46.5750033+00:00",
+        "at": "end",
+        "heartbeat_age_secs": 1.4928129,
+        "check_ts": "2026-11-27T22:44:25.4928683+00:00",
+        "step_start_ts": "2026-11-27T22:44:25.4851527+00:00",
+        "process_alive": true,
+        "last_ts": "2026-11-27T22:44:25Z",
+        "control_alive": false,
+        "log_lines": 1800
+      }
+    },
+    "armed": true,
+    "control_pid": 7580,
+    "eye_pid": 6400,
+    "step_start_ts": "2026-11-27T22:43:06.502082+00:00",
+    "diag_id": "diag-s4-46078179047",
+    "final": {
+      "log_encrypted": false,
+      "eye_stopped_file": true,
+      "heartbeat_ts": null,
+      "has_agent_stop": true,
+      "control_pulse_count": 79,
+      "writer_exit_trace": "[eye] writer_loop exit: channel closed (all producers dropped)",
+      "heartbeat_age_secs": null,
+      "last_ts": "2026-11-27T22:44:26Z",
+      "control_pulse_max_gap_secs": 0.541,
+      "control_last_pulse_ts": "2026-11-27T22:43:46.5750033+00:00",
+      "log_lines": 1802
+    },
+    "step_end_ts": "2026-11-27T22:44:26.7352149+00:00",
+    "eye_launch_ts": "2026-11-27T22:43:06.5849023+00:00"
+  },
+  "runner_note": "does not prove device performance",
+  "council": 23,
+  "signature": "diagnosed-s4-burst-seen",
+  "arm_ts": "2026-11-27T22:43:06.7117786+00:00",
+  "reasons": [
+    "the blindness did NOT reproduce: eye saw 250/250 of the user burst and 250/250 of the SYSTEM burst (raw 250/250 and 250/250) — D5 EXCLUSION of user-session burst blindness, NOT acquittal of h3; the slice-8 blindness needs another mechanism",
+    "no flood signal in this run (0 raw.flood lines) — consistent with the notify-7 source reading; flood evidence is coverage: A raw 250/250, B raw 10/10, C raw 250/250"
+  ],
+  "diag_id": "diag-s4-46078179047",
+  "eye_exit": {
+    "natural": true,
+    "exited_on_stop": true,
+    "killed_by_stop": false,
+    "exit_code": 0
+  }
+}
