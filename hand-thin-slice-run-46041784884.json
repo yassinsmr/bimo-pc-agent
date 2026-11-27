@@ -1,0 +1,130 @@
+{
+  "reasons": [
+    "live-step-phase-error: S1 fail: keyserver key import failed (attempts 1-2; stderr in gpg-keyserver-attempt*.stderr)",
+    "hand-slice-missing (phase 1 never ran — failure before the install phase)",
+    "shot-missing (R6)"
+  ],
+  "slice_window": {
+    "product_code": null,
+    "s3_ts": null,
+    "probe_prefix": "C:\\bimo-slice\\bimo-slice-probe-slice-46041784884",
+    "arm_ts": "2026-11-27T17:28:57.2422197+00:00",
+    "slice_id": "slice-46041784884",
+    "msi_sha256": "e3b0607a092ce2604fbdac027db2c94915995e8e568ebd226f8c5493c2f61a80",
+    "window_end_ts": null,
+    "install_location_expected": "C:\\bimo-slice\\Notepad++",
+    "product_dir_expected": "C:\\bimo-slice\\Notepad++",
+    "s6_ts": null
+  },
+  "m5_note": "does not prove eye survival outside a live step nor device performance",
+  "runner_note": "does not prove device performance",
+  "shot_check": null,
+  "run_id": "46041784884",
+  "hand_slice": null,
+  "slice_inputs": null,
+  "s1_note": "S1 did not complete (slice-inputs.json missing)",
+  "restructure_note": "single-live-step restructure built on one unreplicated positive control (diagnostic run (a)); a slice-3 success must not be read back as proof that run (a) replicates",
+  "eye_exit": {
+    "exited_on_stop": true,
+    "exit_code": 0,
+    "pid": 5236,
+    "killed_by_stop": false,
+    "lifetime": "7.1 s",
+    "alive_before_stop": true
+  },
+  "s7": {
+    "reason": "s3-not-succeeded",
+    "clean": null,
+    "status": "skipped",
+    "revert": null
+  },
+  "verdict": "fail",
+  "timeout_check": {
+    "live_step_timeout_minutes": 40,
+    "margin_secs": 330.0,
+    "fits": true,
+    "budget": [
+      {
+        "item": "arm + S0c probe",
+        "secs": 90
+      },
+      {
+        "item": "S1 fetch (5 x curl --max-time 120)",
+        "secs": 600
+      },
+      {
+        "item": "S1 GPG + Authenticode + COM",
+        "secs": 120
+      },
+      {
+        "item": "Phase 1 install (S2+S3)",
+        "secs": 600
+      },
+      {
+        "item": "S6 + S4 + S5",
+        "secs": 180
+      },
+      {
+        "item": "S7 revert",
+        "secs": 600
+      },
+      {
+        "item": "stop eye + S8 assemble/publish",
+        "secs": 180
+      }
+    ],
+    "worst_case_secs": 2370.0,
+    "job_timeout_secs": 2700
+  },
+  "s6": null,
+  "s1_gpg": {
+    "gpg_version_first_line": "gpg (GnuPG) 2.4.9",
+    "keyserver_import_stderr_attempts": [
+      "gpg: keyblock resource '/d/a/bimo-pc-agent/bimo-pc-agent/C:\\\\gpg-home/pubring.kbx': No such file or directory\r\ngpg: key 6C429F1D8D84F46E: 74 signatures not checked due to missing keys\r\ngpg: no writable keyring found: Not found\r\ngpg: error reading 'D:\\\\a\\\\_temp\\\\bimo-slice-slice-46041784884\\\\keyserver.asc': General error\r\ngpg: import from 'D:\\\\a\\\\_temp\\\\bimo-slice-slice-46041784884\\\\keyserver.asc' failed: General error\r\ngpg: Total number processed: 0\r\n",
+      "gpg: keyblock resource '/d/a/bimo-pc-agent/bimo-pc-agent/C:\\\\gpg-home/pubring.kbx': No such file or directory\r\ngpg: key 6C429F1D8D84F46E: 74 signatures not checked due to missing keys\r\ngpg: no writable keyring found: Not found\r\ngpg: error reading 'D:\\\\a\\\\_temp\\\\bimo-slice-slice-46041784884\\\\keyserver.asc': General error\r\ngpg: import from 'D:\\\\a\\\\_temp\\\\bimo-slice-slice-46041784884\\\\keyserver.asc' failed: General error\r\ngpg: Total number processed: 0\r\n"
+    ],
+    "keyserver_import_attempt": null,
+    "npp_import_stderr": null,
+    "gnupghome": "C:\\gpg-home",
+    "mechanism_note": "F3: a success after a retry does not close the S1 mechanism question — it stays open and carried in the log"
+  },
+  "slice_id": "slice-46041784884",
+  "checkpoints": [
+    {
+      "ts": "2026-11-27T17:28:56.3792060+00:00",
+      "note": "enter",
+      "phase": "S0"
+    },
+    {
+      "ts": "2026-11-27T17:28:56.6937570+00:00",
+      "note": "enter",
+      "phase": "S0b"
+    },
+    {
+      "ts": "2026-11-27T17:28:57.2529027+00:00",
+      "note": "enter",
+      "phase": "S0c"
+    },
+    {
+      "ts": "2026-11-27T17:28:59.4227454+00:00",
+      "note": "enter",
+      "phase": "S1"
+    },
+    {
+      "ts": "2026-11-27T17:29:02.7927321+00:00",
+      "note": "enter-finally",
+      "phase": "S7"
+    },
+    {
+      "ts": "2026-11-27T17:29:02.7949047+00:00",
+      "note": "enter-finally",
+      "phase": "StopEye"
+    },
+    {
+      "ts": "2026-11-27T17:29:03.7771984+00:00",
+      "note": "enter-finally",
+      "phase": "S8"
+    }
+  ],
+  "eye_witness": null
+}
