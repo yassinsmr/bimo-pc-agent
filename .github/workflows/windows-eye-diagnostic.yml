@@ -51,9 +51,10 @@
 # M5 — any future success of (a) is tagged explicitly: "does not prove
 #      eye survival outside a live step nor device performance".
 #      (Closes on arrival day.)
-# Standing rule: the TEMPORARY push trigger is for ONE push only and
-# is removed immediately after run 4 fires; the spike workflow gets NO
-# trigger ever. workflow_dispatch is kept so the workflow stays
+# Standing rule: the TEMPORARY push trigger was removed in this commit,
+# immediately after measurement run 4 fired on it (run 46017829585,
+# verdict diagnosed-control-dead-early-measured). The spike workflow
+# gets NO trigger ever. workflow_dispatch is kept so the workflow stays
 # triggerable if it ever reaches main.
 #
 # Verdict: `diagnosed-<signature>` (job passes — the measurement
@@ -65,10 +66,6 @@
 # is missing proves nothing).
 on:
   workflow_dispatch:
-  push:
-    branches: [hand-thin-slice-c50]
-    # TEMPORARY (council 15 standing rule): remove immediately after
-    # measurement run 4 fires on this push. One push only.
 
 permissions:
   contents: write
