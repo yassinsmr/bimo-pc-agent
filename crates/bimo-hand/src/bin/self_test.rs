@@ -980,7 +980,7 @@ fn proof_8_11(_ctx: &mut Ctx) -> Proof {
     if matches.is_empty() { pass(measured) } else { fail(measured) }
 }
 
-fn msi_request(ctx: &Ctx, id: &str, msi: &str, uninstall: bool, install_dir: &str, name_substring: &str) -> Option<Value> {
+fn msi_request(ctx: &Ctx, id: &str, msi: &str, uninstall: bool, install_dir: &str, name_substring: &str, expected_sha256: &str) -> Option<Value> {
     let cmd = new_command(
         id,
         "install",
@@ -990,6 +990,11 @@ fn msi_request(ctx: &Ctx, id: &str, msi: &str, uninstall: bool, install_dir: &st
             "install_dir": install_dir,
             "name_substring": name_substring,
             "size_bytes": file_size(Path::new(msi)),
+            // The §25.2 hash gate (§39.3) requires this on every install
+            // — 8.1 broke when the gate landed without this field
+            // (executor finding, cycle 55). The hash must be the one
+            // measured from the downloaded file, never a constant.
+            "expected_sha256": expected_sha256,
         }),
         3600,
         json!({"uninstaller": msi}),
@@ -1093,7 +1098,7 @@ fn proof_8_1(ctx: &mut Ctx) -> Proof {
                     let ctl = bimo_hand::control::HandControl::new(&data_dir_b, 2);
                     let _ = ctl.write_stop("hand.stop");
                 });
-                let result = msi_request(ctx, "vlc-install-b", &msi_str, false, target_dir, name_sub);
+                let result = msi_request(ctx, "vlc-install-b", &msi_str, false, target_dir, name_sub, &sha256);
                 let _ = handle.join();
                 if let Some(r) = result {
                     status_b = r.get("status").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -1686,6 +1691,16 @@ fn probe_quiescence(inputs: &SliceInputs, data_dir: &Path, ctl: &HandControl, st
                 // (§45.1.1): otherwise S3's request is cancelled at once.
                 let _ = ctl.clear_stop();
                 let product_state_after = bimo_hand::msi::product_state(&inputs.product_code);
+                // Contrarian finding (cycle 55): the main path checks
+                // product_is_installed here and routes a contradiction
+                // to the safety net — the quiescence branch did not.
+                // A blocked result with the product installed is a
+                // contradiction, never a pass.
+                if product_is_installed(&inputs.product_code) {
+                    let mut out = probe_safety_net(inputs, data_dir, &status, &reason, waited_ms, exec_started_seen);
+                    out.record["stop_resumed"] = json!(true);
+                    return out;
+                }
                 ProbeOutcome {
                     record: json!({
                         "status": "pass", "reason": "sha256-required",
@@ -2083,6 +2098,15 @@ fn run_slice_install(
                         println!("  8.12 S3: supervisor result has no supervisor_rehash");
                         return (1, Some(hand_slice));
                     }
+                    // Contrarian finding (cycle 55): presence is not
+                    // enough — the rehash must MATCH (§25.2: the whole
+                    // point is that the supervisor re-verified the file
+                    // it is about to install).
+                    if hand_slice["steps"]["s3"]["supervisor_rehash"]["match"].as_bool() != Some(true) {
+                        hand_slice["slice_failure"] = json!("supervisor-rehash-mismatch");
+                        println!("  8.12 S3: supervisor_rehash.match != true");
+                        return (1, Some(hand_slice));
+                    }
                 }
             }
         }
@@ -2115,6 +2139,22 @@ fn run_slice_revert(inputs: &SliceInputs, data_dir: &Path, out_path: &Path) -> i
             return 1;
         }
     };
+    // Contrarian finding (cycle 55, BLOCKER): phase 2 must refuse
+    // unless phase 1's S3 completed with matching slice/command ids.
+    // Without this, revert() on a never-installed product returns
+    // Reverted + exit 0 (ensure_product_absent: absent => Reverted),
+    // and the slice would claim a revert that never happened.
+    let s3_done = hand_slice["steps"]["s3"]["result"]["status"].as_str() == Some("done");
+    let ids_match = hand_slice["slice_id"].as_str() == Some(inputs.slice_id.as_str())
+        && hand_slice["command_id"].as_str() == Some(inputs.command_id.as_str());
+    if !s3_done || !ids_match {
+        hand_slice["steps"]["s7"] = json!({"ts": utc_now_secs(), "result": "revert-without-s3", "duration_ms": 0});
+        hand_slice["slice_failure"] = json!("revert-without-s3");
+        hand_slice["slice_exit_code"] = json!(1);
+        let _ = write_json_file(out_path, &hand_slice);
+        println!("slice revert: refused — S3 did not complete (s3_done={}) or slice/command id mismatch (ids_match={}); no revert run", s3_done, ids_match);
+        return 1;
+    }
     let mut cmd = build_slice_command(inputs, true, Some(SLICE_MSI_SHA256.to_string()), None);
     cmd.approved = true;
     if !verify_revert_plan(&cmd) {
