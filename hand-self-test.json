@@ -3,16 +3,16 @@
     "cpu_note": "not measured on the runner",
     "cpu_percent": null,
     "queue_size": 9,
-    "ram_available_mb": 13585,
+    "ram_available_mb": 13470,
     "ram_total_mb": 16378,
     "revert_failed_correctly": 1,
     "revert_success_rate": 1.0,
     "reverts_expected_success": 1,
     "reverts_succeeded": 1,
     "stop_ms_by_kind": {
-      "install": 1011,
-      "probe_grandchild": 68,
-      "transfer": 23
+      "install": 1623,
+      "probe_grandchild": 75,
+      "transfer": 56
     }
   },
   "proofs": {
@@ -26,16 +26,16 @@
           "tree_kill": 1000,
           "verify": 500
         },
-        "cancel_ms": 986,
+        "cancel_ms": 1595,
         "external_ui_prev_non_null": false,
         "firefox_excluded": "pre-installed in the runner image: C\\Program Files\\Mozilla Firefox already contained firefox.exe before install (runs 14 and 19); 8.1 is proven by VLC only",
-        "handler_first_ms": 7,
+        "handler_first_ms": 10,
         "installers": [
           {
             "installer": "vlc",
             "name_substring": "VLC media player",
             "phase_a": {
-              "install_duration_ms": 7742,
+              "install_duration_ms": 11397,
               "pre_command_state": {
                 "msi_execute_mutex_free": true,
                 "product_state": null,
@@ -54,16 +54,16 @@
             },
             "phase_b": {
               "cancel_depth": {
-                "handler_calls_at_cancel": 6425,
+                "handler_calls_at_cancel": 6315,
                 "last_action": "InstallFiles",
                 "reached_register_product": true
               },
-              "cancel_ms": 986,
+              "cancel_ms": 1595,
               "external_ui_prev_non_null": false,
-              "forced_ms": 986,
-              "handler_first_ms": 7,
+              "forced_ms": 1595,
+              "handler_first_ms": 10,
               "internal_ui_prev": 1,
-              "kill_ms_after_start": 3096,
+              "kill_ms_after_start": 4558,
               "mutex_free": true,
               "pre_command_state": {
                 "msi_execute_mutex_free": true,
@@ -80,12 +80,12 @@
               "return_code": 1602,
               "service_idle": true,
               "status": "pass",
-              "stop_ms": 1011,
+              "stop_ms": 1623,
               "survivors": [],
               "target_folder_empty": true,
               "tree_dead": true,
               "trigger": "hand.stop",
-              "ui_calls": 8667
+              "ui_calls": 8341
             },
             "product_code": "{9675011C-2395-4AD7-B1CC-92910F991F58}",
             "product_version": null,
@@ -95,21 +95,21 @@
         "internal_ui_prev": 1,
         "spike_reference": "unit3-kill-spike-c39 stage2: return 1602, cancel_ms 842, handler_calls 8099",
         "stop_ms_by_kind": {
-          "install_tree": 1011,
-          "msi_cancel": 986,
-          "transfer_tree": 23
+          "install_tree": 1623,
+          "msi_cancel": 1595,
+          "transfer_tree": 56
         },
-        "ui_calls": 8667
+        "ui_calls": 8341
       },
       "status": "pass"
     },
     "8.10a": {
       "measured": {
-        "fake_size_bytes": 28780519424,
-        "free_bytes": 27706777600,
+        "fake_size_bytes": 31297662976,
+        "free_bytes": 30223921152,
         "nothing_written": true,
         "prepare_error": "disk-space",
-        "required_bytes": 31658571366,
+        "required_bytes": 34427429273,
         "state_failed_disk_space": true,
         "target_exists": false
       },
@@ -143,7 +143,7 @@
         "progress_pct_at_kill": 25.390625,
         "status": "stopped",
         "stop_method": "stopped",
-        "stop_ms": 117,
+        "stop_ms": 118,
         "tree_dead": true
       },
       "status": "pass"
@@ -157,9 +157,9 @@
               "last_action": null,
               "reached_register_product": false
             },
-            "cooperative_ms": 4,
+            "cooperative_ms": 18,
             "external_ui_prev_non_null": false,
-            "forced_ms": 10,
+            "forced_ms": 24,
             "handler_first_ms": 0,
             "handles_released": true,
             "installer_kind": "command",
@@ -171,7 +171,7 @@
               {
                 "last_error": 0,
                 "ok": true,
-                "pid": 9020
+                "pid": 624
               }
             ],
             "orphans_enumerated": 1,
@@ -181,22 +181,22 @@
             "return_code": null,
             "service_idle": null,
             "status": "stopped",
-            "stop_ms": 23,
+            "stop_ms": 56,
             "stop_unconfirmed": false,
             "survivors": [],
             "tree_dead": true,
             "trigger": "hand.stop",
             "ui_calls": 0,
-            "verify_ms": 5
+            "verify_ms": 9
           },
-          "duration_ms": 336,
+          "duration_ms": 593,
           "handles_released": true,
           "installer_elevated": true,
           "partial_cleaned": true,
           "remaining_pids": [],
           "status": "stopped",
           "stop_method": "stopped",
-          "stop_ms": 23,
+          "stop_ms": 56,
           "supervisor_elevated": true,
           "tree_dead": true
         },
@@ -206,11 +206,11 @@
         "orphan_gone_by_window": true,
         "orphan_in_ppid_tree": false,
         "orphan_parent_is_wmiprvse": true,
-        "orphan_pid": 9020,
-        "orphan_ppid": 7752,
+        "orphan_pid": 624,
+        "orphan_ppid": 3220,
         "orphan_ppid_exe": "C:\\Windows\\System32\\wbem\\WmiPrvSE.exe",
         "ppid_enumeration_does_not_cover_wmi_com": true,
-        "root_pid": 6856
+        "root_pid": 8040
       },
       "status": "pass"
     },
@@ -228,19 +228,19 @@
         "eicar_sha256": "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f",
         "file_untouched": true,
         "guardian_verdict_block_eicar": true,
-        "prepare_error": "needs_approval",
+        "prepare_error": "blocked_eicar",
         "quarantine_hash_matches": true,
         "quarantine_ok": true
       },
-      "status": "fail"
+      "status": "pass"
     },
     "8.5": {
       "measured": {
         "grandchild_in_job": true,
-        "grandchild_pid": 2516,
+        "grandchild_pid": 2360,
         "job_process_count": 4,
         "job_process_limit": 32,
-        "stop_ms": 68
+        "stop_ms": 75
       },
       "status": "pass"
     },
@@ -255,10 +255,10 @@
     },
     "8.7": {
       "measured": {
-        "prepare_error": "needs_approval",
+        "prepare_error": "guardian_unavailable",
         "stayed_queued_with_reason": true
       },
-      "status": "fail"
+      "status": "pass"
     },
     "8.8": {
       "measured": {
@@ -268,8 +268,8 @@
         "heartbeat_returned": true,
         "missed_beats_reached": true,
         "new_commands_refused_while_deadman": true,
-        "new_worker_pid": 1352,
-        "old_worker_pid": 1728,
+        "new_worker_pid": 8680,
+        "old_worker_pid": 1272,
         "restart_recorded": true,
         "stopped_written": true,
         "worker_restarted": true
@@ -280,37 +280,37 @@
       "measured": {
         "abort": {
           "cancel_depth": {
-            "handler_calls_at_cancel": 6197,
-            "last_action": "InstallFiles",
+            "handler_calls_at_cancel": 5633,
+            "last_action": "ProcessComponents",
             "reached_register_product": true
           },
           "cooperative_ms": 0,
           "external_ui_prev_non_null": false,
-          "forced_ms": 687,
-          "handler_first_ms": 4,
+          "forced_ms": 312,
+          "handler_first_ms": 5,
           "handles_released": true,
           "installer_kind": "msi",
           "internal_ui_prev": 1,
           "leftovers_empty": true,
           "mutex_free": true,
-          "note": "msi cancel via IDCANCEL; handler_calls=7989; stop-unconfirmed means the queue must stay blocked until Global_MSI_Execute is free and the supervisor records a final result",
+          "note": "msi cancel via IDCANCEL; handler_calls=6461; stop-unconfirmed means the queue must stay blocked until Global_MSI_Execute is free and the supervisor records a final result",
           "orphan_kill_attempts": [],
           "orphans_enumerated": 0,
           "product_absent": true,
           "product_state": null,
           "remaining_pids": [
-            4052
+            6064
           ],
           "return_code": 1602,
           "service_idle": true,
           "status": "stopped",
-          "stop_ms": 708,
+          "stop_ms": 329,
           "stop_unconfirmed": false,
           "survivors": [],
           "tree_dead": true,
           "trigger": "ttl",
-          "ui_calls": 7989,
-          "verify_ms": 25
+          "ui_calls": 6461,
+          "verify_ms": 36
         },
         "mutex_free": true,
         "pre_command_state": {
@@ -332,5 +332,5 @@
   },
   "red_line": "met",
   "runner_note": "does not prove device performance",
-  "verdict": "fail"
+  "verdict": "pass"
 }
