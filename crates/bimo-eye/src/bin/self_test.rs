@@ -69,8 +69,204 @@ fn has_event_reason(events: &[serde_json::Value], ty: &str, reason: &str) -> boo
     })
 }
 
+/// --watch mode (thin slice, spec §17.5 / §29.1 S0b): run the eye
+/// as a long-lived watcher on caller-chosen folders until the
+/// operator writes `eye.stop` into the data dir, then stop
+/// gracefully and exit 0.
+///
+/// Usage:
+///   bimo-eye-self-test.exe --watch --data-dir <dir>
+///       --watch-dirs 'C:\Program Files' [--snapshot-secs 1]
+///       [--heartbeat-secs 2] [--debounce-secs 2]
+///       [--reconcile-secs 300] [--max-secs 1200]
+///
+/// Notes the spec does not name, recorded here so the council can
+/// judge them (all verified against the code, not assumed):
+/// - Plaintext log: on Windows the eye DPAPI-protects every log
+///   line (log.rs `protect_line`), so the slice workflow's
+///   PowerShell witness checks cannot read `eye-events.jsonl`
+///   directly. The workflow therefore runs the eye with
+///   `BIMO_EYE_PLAINTEXT_OK=1`; the opt-in is itself recorded in
+///   the log as a Warning by `eye::start` (council condition 2).
+///   This is a throwaway runner log, never Yassin's real data.
+/// - `eye.stop` pauses logging (control.rs) AND ends this mode:
+///   the main thread polls for the file and calls `handle.stop()`,
+///   so the process exits by itself — the workflow does not need
+///   to kill it (it still force-kills after a 30 s grace, as a
+///   safety net). The log therefore ends with `agent.stop`
+///   (eye.stop-file) from control plus the final `agent.stop`
+///   (eye.stop) from the writer.
+/// - `--max-secs` (default 1200, 20 min) is a safety net only: the
+///   spike sequence takes ~4 min, the workflow timeout is 30 min.
+///   Hitting it exits 2 (timeout, not a clean stop) so CI goes red
+///   instead of hanging.
+/// - `--watch-dirs` is semicolon-separated (a path itself never
+///   contains `;` on Windows).
+struct WatchArgs {
+    data_dir: PathBuf,
+    watch_dirs: Vec<PathBuf>,
+    debounce_secs: u64,
+    snapshot_secs: u64,
+    reconcile_secs: u64,
+    heartbeat_secs: u64,
+    max_secs: u64,
+}
+
+fn parse_watch_args(args: &[String]) -> WatchArgs {
+    let mut data_dir: Option<PathBuf> = None;
+    let mut watch_dirs: Vec<PathBuf> = Vec::new();
+    let mut debounce_secs = 2u64;
+    let mut snapshot_secs = 10u64;
+    let mut reconcile_secs = 300u64;
+    let mut heartbeat_secs = 30u64;
+    let mut max_secs = 1200u64;
+    let mut i = 1;
+    while i < args.len() {
+        let take = |i: &mut usize| -> Option<String> {
+            *i += 1;
+            args.get(*i).cloned()
+        };
+        match args[i].as_str() {
+            "--data-dir" => {
+                if let Some(v) = take(&mut i) {
+                    data_dir = Some(PathBuf::from(v));
+                }
+            }
+            "--watch-dirs" => {
+                if let Some(v) = take(&mut i) {
+                    watch_dirs = v
+                        .split(';')
+                        .filter(|s| !s.trim().is_empty())
+                        .map(|s| PathBuf::from(s.trim()))
+                        .collect();
+                }
+            }
+            "--debounce-secs" => {
+                if let Some(v) = take(&mut i) {
+                    debounce_secs = v.parse().unwrap_or(debounce_secs);
+                }
+            }
+            "--snapshot-secs" => {
+                if let Some(v) = take(&mut i) {
+                    snapshot_secs = v.parse().unwrap_or(snapshot_secs);
+                }
+            }
+            "--reconcile-secs" => {
+                if let Some(v) = take(&mut i) {
+                    reconcile_secs = v.parse().unwrap_or(reconcile_secs);
+                }
+            }
+            "--heartbeat-secs" => {
+                if let Some(v) = take(&mut i) {
+                    heartbeat_secs = v.parse().unwrap_or(heartbeat_secs);
+                }
+            }
+            "--max-secs" => {
+                if let Some(v) = take(&mut i) {
+                    max_secs = v.parse().unwrap_or(max_secs);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let data_dir = data_dir.unwrap_or_else(|| {
+        std::env::temp_dir().join(format!("bimo-eye-watch-{}", std::process::id()))
+    });
+    WatchArgs {
+        data_dir,
+        watch_dirs,
+        debounce_secs,
+        snapshot_secs,
+        reconcile_secs,
+        heartbeat_secs,
+        max_secs,
+    }
+}
+
+fn run_watch_mode(args: &[String]) -> i32 {
+    let wa = parse_watch_args(args);
+    if wa.watch_dirs.is_empty() {
+        eprintln!("--watch needs --watch-dirs <dir[;dir...]>; refusing to watch nothing");
+        return 2;
+    }
+    if let Err(e) = std::fs::create_dir_all(&wa.data_dir) {
+        eprintln!("cannot create data dir {}: {e}", wa.data_dir.display());
+        return 2;
+    }
+    let cfg = EyeConfig {
+        watch_dirs: wa.watch_dirs.clone(),
+        data_dir: wa.data_dir.clone(),
+        debounce_secs: wa.debounce_secs,
+        snapshot_secs: wa.snapshot_secs,
+        reconcile_secs: wa.reconcile_secs,
+        heartbeat_secs: wa.heartbeat_secs,
+        game_mode: false,
+    };
+    eprintln!(
+        "--watch: watching {} (debounce {}s, snapshot {}s, heartbeat {}s, max {}s)",
+        wa.watch_dirs
+            .iter()
+            .map(|d| d.display().to_string())
+            .collect::<Vec<_>>()
+            .join("; "),
+        wa.debounce_secs,
+        wa.snapshot_secs,
+        wa.heartbeat_secs,
+        wa.max_secs
+    );
+    let handle = match start(cfg) {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("eye failed to start: {e}");
+            return 2;
+        }
+    };
+    let started = Instant::now();
+    let stop_file = wa.data_dir.join("eye.stop");
+    let mut stopped_by_file = false;
+    loop {
+        if stop_file.exists() {
+            stopped_by_file = true;
+            break;
+        }
+        if wa.max_secs > 0 && started.elapsed().as_secs() >= wa.max_secs {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    let elapsed = started.elapsed();
+    eprintln!(
+        "--watch: stopping after {:.1}s ({})",
+        elapsed.as_secs_f64(),
+        if stopped_by_file {
+            "eye.stop written"
+        } else {
+            "max-secs reached"
+        }
+    );
+    handle.stop();
+    println!(
+        "--watch: stopped after {:.1}s ({})",
+        elapsed.as_secs_f64(),
+        if stopped_by_file {
+            "eye.stop"
+        } else {
+            "max-secs timeout"
+        }
+    );
+    if stopped_by_file {
+        0
+    } else {
+        2
+    }
+}
+
 fn main() { eprintln!("[trace] main start");
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--watch") {
+        std::process::exit(run_watch_mode(&args));
+    }
     let mut out = PathBuf::from("eye-self-test.json");
     let mut work = std::env::temp_dir().join(format!(
         "bimo-eye-self-test-{}",

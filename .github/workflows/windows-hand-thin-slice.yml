@@ -1,0 +1,361 @@
+# Windows hand thin-slice SPIKE workflow — Track A Unit 3 (the Hand),
+# spec track-a-unit3-thin-slice.md §26 (thresholds T1–T6) + §36 + L1.
+#
+# Purpose: prove on REAL Windows, before building 8.12, that the eye
+# can witness an install inside `C:\Program Files` from the runner
+# session — the one open unknown the spec names (§26.4):
+#   T1  probe file appears (file.completed + install.detected ≤ 10 s)
+#   T2  noise in the rest of Program Files ≤ 50 file.completed / 60 s
+#   T3  rename is reported (new name file.completed ≤ 30 s)
+#   T4  gpg is available (S1 depends on it)
+#   T5  session elevation RECORDED ONLY (not a gate)
+#   T6  Ubuntu keyserver reachable (HTTP 200 ≤ 30 s, §36.4 command)
+#   L1  deny-write lock trial on the real Notepad++ MSI (NOT a gate:
+#       applicable / rejected-by-evidence / inconclusive, §36.3)
+#
+# Verdict is MECHANICAL (§26.4): pass = T1,T2,T3,T4,T6 all pass
+# (T5 recorded, L1 recorded). Any FAIL = spike failed → STOP → back
+# to the council with the two alternatives (§28.2). No 8.12 build
+# and no slice run on a failed spike, in this cycle or any other.
+#
+# The eye runs in the new `--watch` mode of bimo-eye-self-test
+# (spec §17.5 / §29.1 S0b). Two implementation facts the spec does
+# not name, recorded here so the council can judge them:
+# - PLAINTEXT LOG: on Windows the eye DPAPI-protects every log line
+#   (log.rs `protect_line`), so the PowerShell witness checks below
+#   cannot read eye-events.jsonl directly. The eye is therefore
+#   launched with BIMO_EYE_PLAINTEXT_OK=1; the opt-in is itself
+#   recorded in the log as a Warning by eye::start (council
+#   condition 2). Throwaway runner log, never real user data.
+# - The eye exits BY ITSELF when eye.stop is written (--watch polls
+#   for the file and calls handle.stop()); the stop step force-kills
+#   only after a 30 s grace, as a safety net.
+#
+# Results go to the `spike-results` branch as
+# hand-thin-slice-spike-results.json (a distinct name: the eye spike
+# already owns spike-results.json there — never clobber it).
+# Honest limits, recorded in the JSON: runner numbers do not prove
+# device performance; no Defender check runs here (realtime was off
+# on the runner in the eye spike); no real fullscreen game on the
+# runner — the fullscreen-overlay gate is decided on the Legion.
+
+name: windows-hand-thin-slice
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "crates/bimo-eye/**"
+      - ".github/workflows/windows-hand-thin-slice.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  spike:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      SPIKE_DIR: ${{ runner.temp }}\bimo-spike
+      EYE_DATA: ${{ runner.temp }}\bimo-spike\eye-data
+      EYE_EXE: target\x86_64-pc-windows-msvc\release\bimo-eye-self-test.exe
+      PROBE_PREFIX: 'C:\Program Files\bimo-slice-probe-'
+      PRODUCT_DIR: 'C:\Program Files\Notepad++'
+      MSI_SHA256: e3b0607a092ce2604fbdac027db2c94915995e8e568ebd226f8c5493c2f61a80
+      MSI_URL: https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.9.9.1/npp.8.9.9.1.Installer.x64.msi
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable + MSVC target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build eye core for Windows
+        run: |
+          cargo build --release --target x86_64-pc-windows-msvc --locked -p bimo-eye
+
+      - name: Unit tests (eye core)
+        run: |
+          cargo test --release --target x86_64-pc-windows-msvc --locked -p bimo-eye
+
+      - name: Arm eye --watch on Program Files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path $env:EYE_DATA | Out-Null
+          $sliceId = "spike-$env:GITHUB_RUN_ID"
+          $sliceId | Out-File -FilePath "$env:SPIKE_DIR\slice-id.txt" -Encoding utf8
+          # Plaintext log is REQUIRED for the PowerShell witness checks
+          # below (see workflow header); the opt-in is recorded in the
+          # eye log itself.
+          $env:BIMO_EYE_PLAINTEXT_OK = "1"
+          $eyeExe = Join-Path $env:GITHUB_WORKSPACE $env:EYE_EXE
+          $proc = Start-Process -FilePath $eyeExe -ArgumentList @(
+            "--watch", "--data-dir", $env:EYE_DATA,
+            "--watch-dirs", "C:\Program Files",
+            "--snapshot-secs", "1", "--heartbeat-secs", "2",
+            "--max-secs", "1200"
+          ) -WindowStyle Hidden -PassThru -RedirectStandardOutput "$env:SPIKE_DIR\eye-stdout.log" -RedirectStandardError "$env:SPIKE_DIR\eye-stderr.log"
+          $proc.Id | Out-File -FilePath "$env:SPIKE_DIR\eye-pid.txt" -Encoding utf8
+          # Wait for a FRESH heartbeat (< 10 s old, spec S0b).
+          $deadline = (Get-Date).AddSeconds(30)
+          $armed = $false
+          while ((Get-Date) -lt $deadline) {
+            $hb = "$env:EYE_DATA\heartbeat.json"
+            if (Test-Path $hb) {
+              $ts = (Get-Content $hb -Raw | ConvertFrom-Json).ts
+              $age = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($ts)).TotalSeconds
+              if ($age -lt 10) { $armed = $true; break }
+            }
+            Start-Sleep -Milliseconds 500
+          }
+          if (-not $armed) { throw "arm failed: no fresh heartbeat.json within 30 s" }
+          # arm_ts: the T2 observation window starts HERE (§36.1).
+          [DateTimeOffset]::UtcNow.ToString("o") | Out-File -FilePath "$env:SPIKE_DIR\arm-ts.txt" -Encoding utf8
+          Write-Host "eye armed, pid $($proc.Id), arm_ts $(Get-Content "$env:SPIKE_DIR\arm-ts.txt")"
+
+      - name: T2 noise observation (60 s)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = "Continue"
+          . $env:GITHUB_WORKSPACE\.github\scripts\spike-log.ps1
+          Start-Sleep -Seconds 60
+          $armTs = [DateTimeOffset]::Parse((Get-Content "$env:SPIKE_DIR\arm-ts.txt" -Raw).Trim())
+          $events = Read-EyeLog -Path "$env:EYE_DATA\eye-events.jsonl"
+          $noise = @($events | Where-Object {
+            $_.type -eq "file.completed" -and
+            $_.path -like "C:\Program Files\*" -and
+            $_.path -notlike "$env:PROBE_PREFIX*" -and
+            $_.path -notlike "$env:PRODUCT_DIR*" -and
+            ([DateTimeOffset]::Parse($_.ts) -ge $armTs)
+          })
+          $status = if ($noise.Count -le 50) { "pass" } else { "fail" }
+          @{ threshold = "T2"; status = $status; noise_count = $noise.Count; limit = 50; window_secs = 60 } | ConvertTo-Json | Out-File -FilePath "$env:SPIKE_DIR\t2.json" -Encoding utf8
+          Write-Host "T2 $status : $($noise.Count) noise events (limit 50)"
+          if ($status -eq "fail") { exit 1 }
+
+      - name: T1 probe file appears (<= 10 s)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = "Continue"
+          . $env:GITHUB_WORKSPACE\.github\scripts\spike-log.ps1
+          $sliceId = (Get-Content "$env:SPIKE_DIR\slice-id.txt" -Raw).Trim()
+          $probeDir = "$env:PROBE_PREFIX$sliceId"
+          New-Item -ItemType Directory -Force -Path $probeDir | Out-Null
+          $probeExe = Join-Path $probeDir "probe.exe"
+          $t0 = [DateTimeOffset]::UtcNow
+          New-Item -ItemType File -Force -Path $probeExe | Out-Null
+          $completedMs = $null; $detectedMs = $null
+          $deadline = (Get-Date).AddSeconds(10)
+          while ((Get-Date) -lt $deadline) {
+            $events = Read-EyeLog -Path "$env:EYE_DATA\eye-events.jsonl"
+            if ($null -eq $completedMs) {
+              $e = @($events | Where-Object { $_.type -eq "file.completed" -and $_.path -eq $probeExe })
+              if ($e.Count -gt 0) { $completedMs = [int]([DateTimeOffset]::UtcNow - $t0).TotalMilliseconds }
+            }
+            if ($null -eq $detectedMs) {
+              $e = @($events | Where-Object { $_.type -eq "install.detected" -and $_.path -eq $probeExe })
+              if ($e.Count -gt 0) { $detectedMs = [int]([DateTimeOffset]::UtcNow - $t0).TotalMilliseconds }
+            }
+            if ($null -ne $completedMs -and $null -ne $detectedMs) { break }
+            Start-Sleep -Milliseconds 500
+          }
+          $status = if ($null -ne $completedMs -and $null -ne $detectedMs) { "pass" } else { "fail" }
+          @{ threshold = "T1"; status = $status; completed_ms = $completedMs; detected_ms = $detectedMs; limit_ms = 10000; probe = $probeExe } | ConvertTo-Json | Out-File -FilePath "$env:SPIKE_DIR\t1.json" -Encoding utf8
+          Write-Host "T1 $status : completed=${completedMs}ms detected=${detectedMs}ms (limit 10000ms)"
+          Remove-Item -Recurse -Force $probeDir -ErrorAction SilentlyContinue
+          if ($status -eq "fail") { exit 1 }
+
+      - name: T3 rename is reported (<= 30 s)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = "Continue"
+          . $env:GITHUB_WORKSPACE\.github\scripts\spike-log.ps1
+          $sliceId = (Get-Content "$env:SPIKE_DIR\slice-id.txt" -Raw).Trim()
+          $probeDir = "$env:PROBE_PREFIX$sliceId"
+          New-Item -ItemType Directory -Force -Path $probeDir | Out-Null
+          $a = Join-Path $probeDir "probe-rename-a.exe"
+          $b = Join-Path $probeDir "probe-rename-b.exe"
+          New-Item -ItemType File -Force -Path $a | Out-Null
+          # First completion (same probe latency budget as T1: 10 s).
+          $seenA = Wait-EyeEvent -Path "$env:EYE_DATA\eye-events.jsonl" -Type "file.completed" -ExactPath $a -TimeoutSecs 10
+          $renamedMs = $null
+          if ($seenA) {
+            $t0 = [DateTimeOffset]::UtcNow
+            Rename-Item -Path $a -NewName "probe-rename-b.exe"
+            $renamedMs = Wait-EyeEventMs -Path "$env:EYE_DATA\eye-events.jsonl" -Type "file.completed" -ExactPath $b -TimeoutSecs 30 -Since $t0
+          }
+          $status = if ($null -ne $renamedMs) { "pass" } else { "fail" }
+          @{ threshold = "T3"; status = $status; first_seen = $seenA; renamed_ms = $renamedMs; limit_ms = 30000 } | ConvertTo-Json | Out-File -FilePath "$env:SPIKE_DIR\t3.json" -Encoding utf8
+          Write-Host "T3 $status : first_seen=$seenA renamed_ms=${renamedMs} (limit 30000ms)"
+          Remove-Item -Recurse -Force $probeDir -ErrorAction SilentlyContinue
+          if ($status -eq "fail") { exit 1 }
+
+      - name: T4 gpg + T5 elevation (recorded)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = "Continue"
+          $gpg = $null
+          if (Get-Command gpg -ErrorAction SilentlyContinue) { $gpg = (Get-Command gpg).Source }
+          elseif (Test-Path "C:\Program Files\Git\usr\bin\gpg.exe") { $gpg = "C:\Program Files\Git\usr\bin\gpg.exe" }
+          $t4 = if ($null -ne $gpg) { "pass" } else { "fail" }
+          @{ threshold = "T4"; status = $t4; gpg = $gpg } | ConvertTo-Json | Out-File -FilePath "$env:SPIKE_DIR\t4.json" -Encoding utf8
+          Write-Host "T4 $t4 : gpg=$gpg"
+          # T5 is recorded only, never a gate (§26.2).
+          $groups = whoami /groups
+          $elevated = ($groups -match "S-1-16-12288").Count -gt 0
+          @{ threshold = "T5"; status = "recorded"; elevated = $elevated } | ConvertTo-Json | Out-File -FilePath "$env:SPIKE_DIR\t5.json" -Encoding utf8
+          Write-Host "T5 recorded: elevated=$elevated"
+          if ($t4 -eq "fail") { exit 1 }
+
+      - name: T6 keyserver reachable (<= 30 s)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = "Continue"
+          # Exact command from spec §36.4.
+          & curl.exe --fail --silent --show-error --max-time 30 "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x14BCE4362749B2B51F8C71226C429F1D8D84F46E" --output "$env:SPIKE_DIR\key.asc"
+          $code = $LASTEXITCODE
+          $status = if ($code -eq 0) { "pass" } else { "fail" }
+          @{ threshold = "T6"; status = $status; exit_code = $code } | ConvertTo-Json | Out-File -FilePath "$env:SPIKE_DIR\t6.json" -Encoding utf8
+          Write-Host "T6 $status : curl exit=$code"
+          if ($status -eq "fail") { exit 1 }
+
+      - name: L1 deny-write lock trial (not a gate)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = "Continue"
+          $msi = "$env:SPIKE_DIR\npp.8.9.9.1.Installer.x64.msi"
+          $outcome = "inconclusive"; $detail = ""; $msiExit = $null; $extracted = 0
+          & curl.exe --fail --location --max-time 120 -o $msi $env:MSI_URL
+          if ($LASTEXITCODE -ne 0) {
+            $detail = "msi download failed (curl exit $LASTEXITCODE)"
+          } else {
+            $hash = (Get-FileHash -Algorithm SHA256 $msi).Hash.ToLower()
+            if ($hash -ne $env:MSI_SHA256) {
+              $detail = "sha256 mismatch: got $hash"
+            } else {
+              $target = "$env:SPIKE_DIR\msi-extract"
+              New-Item -ItemType Directory -Force -Path $target | Out-Null
+              $fs = $null
+              try {
+                # FileShare.Read = deny-write: blocks write/delete, allows read (§36.3).
+                $fs = [System.IO.File]::Open($msi, 'Open', 'Read', 'Read')
+                $p = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/a", "`"$msi`"", "TARGETDIR=`"$target`"", "/qn") -Wait -PassThru -NoNewWindow
+                $msiExit = $p.ExitCode
+                $extracted = @(Get-ChildItem -Recurse -File $target -ErrorAction SilentlyContinue).Count
+                if ($msiExit -eq 0 -and $extracted -gt 0) {
+                  $outcome = "applicable"; $detail = "msiexec /a exit 0, $extracted files extracted under deny-write lock"
+                } else {
+                  $errText = ""
+                  try { $errText = (Get-WinEvent -FilterHashtable @{ LogName = "Application"; ProviderName = "MsiInstaller" } -MaxEvents 3 -ErrorAction Stop | Select-Object -First 1 -ExpandProperty Message) } catch {}
+                  if ($errText -match "in use|being used|cannot access") {
+                    $outcome = "rejected-by-evidence"; $detail = "msiexec cannot open the file under deny-write lock (exit $msiExit)"
+                  } else {
+                    $outcome = "inconclusive"; $detail = "msiexec /a exit $msiExit, extracted $extracted (not an in-use failure)"
+                  }
+                }
+              } catch {
+                $outcome = "inconclusive"; $detail = "lock trial error: $($_.Exception.Message)"
+              } finally {
+                if ($null -ne $fs) { $fs.Close() }
+              }
+            }
+          }
+          @{ trial = "L1"; outcome = $outcome; detail = $detail; msiexec_exit = $msiExit; extracted_files = $extracted } | ConvertTo-Json | Out-File -FilePath "$env:SPIKE_DIR\l1.json" -Encoding utf8
+          Write-Host "L1 $outcome : $detail"
+
+      - name: Stop eye --watch
+        shell: pwsh
+        if: always()
+        run: |
+          $ErrorActionPreference = "Continue"
+          $pid = (Get-Content "$env:SPIKE_DIR\eye-pid.txt" -Raw).Trim()
+          "stop" | Out-File -FilePath "$env:EYE_DATA\eye.stop" -Encoding utf8
+          # The eye exits by itself on eye.stop; force-kill only after grace.
+          $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+          $how = "eye.stop"
+          if ($null -ne $proc) {
+            if (-not $proc.WaitForExit(30000)) {
+              Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+              $how = "force-killed"
+            }
+          }
+          @{ stop = $how } | ConvertTo-Json | Out-File -FilePath "$env:SPIKE_DIR\stop.json" -Encoding utf8
+          Write-Host "eye stopped via $how"
+
+      - name: Assemble spike verdict
+        shell: pwsh
+        if: always()
+        run: |
+          $ErrorActionPreference = "Continue"
+          function Read-Frag($name) {
+            $f = "$env:SPIKE_DIR\$name"
+            if (Test-Path $f) { return (Get-Content $f -Raw | ConvertFrom-Json) }
+            return $null
+          }
+          $t1 = Read-Frag "t1.json"; $t2 = Read-Frag "t2.json"; $t3 = Read-Frag "t3.json"
+          $t4 = Read-Frag "t4.json"; $t5 = Read-Frag "t5.json"; $t6 = Read-Frag "t6.json"
+          $l1 = Read-Frag "l1.json"; $stop = Read-Frag "stop.json"
+          $missing = @()
+          foreach ($pair in @(("T1",$t1),("T2",$t2),("T3",$t3),("T4",$t4),("T6",$t6))) {
+            if ($null -eq $pair[1]) { $missing += $pair[0] }
+          }
+          $gates = @($t1, $t2, $t3, $t4, $t6) | Where-Object { $null -ne $_ -and $_.status -eq "pass" }
+          $verdict = if ($missing.Count -eq 0 -and $gates.Count -eq 5) { "pass" } else { "fail" }
+          $result = @{
+            verdict = $verdict
+            run_id = $env:GITHUB_RUN_ID
+            ts = [DateTimeOffset]::UtcNow.ToString("o")
+            thresholds = @{ T1 = $t1; T2 = $t2; T3 = $t3; T4 = $t4; T5 = $t5; T6 = $t6 }
+            L1 = $l1
+            eye = @{ stop = ($stop.stop) }
+            missing_fragments = $missing
+            notes = @(
+              "runner numbers do not prove device performance (flawhunt 11-z)",
+              "no Defender check runs in this spike (realtime was off on the runner in the eye spike)",
+              "no real fullscreen game on the runner; the fullscreen-overlay gate is decided on the Legion (second gate)"
+            )
+          }
+          $result | ConvertTo-Json -Depth 6 | Out-File -FilePath "hand-thin-slice-spike-results.json" -Encoding utf8
+          Get-Content "hand-thin-slice-spike-results.json"
+          if ($verdict -ne "pass") { exit 1 }
+
+      - name: Publish spike results to spike-results branch
+        if: always()
+        shell: bash
+        run: |
+          git config user.name "bimo-gate"
+          git config user.email "bimo-gate@local"
+          mkdir -p /tmp/spike-publish
+          [ -f hand-thin-slice-spike-results.json ] && mv -f hand-thin-slice-spike-results.json /tmp/spike-publish/ || true
+          git fetch origin spike-results || true
+          if git rev-parse --verify origin/spike-results >/dev/null 2>&1; then
+            git checkout spike-results
+          else
+            git checkout -B spike-results
+          fi
+          mv -f /tmp/spike-publish/hand-thin-slice-spike-results.json . || true
+          git add -f hand-thin-slice-spike-results.json || true
+          if git diff --cached --quiet; then
+            echo "no spike results to commit"
+          else
+            git commit -m "hand thin-slice spike results $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            git push origin spike-results
+          fi
+
+      - name: Upload spike results + binary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-hand-thin-slice
+          path: |
+            hand-thin-slice-spike-results.json
+            target/x86_64-pc-windows-msvc/release/bimo-eye-self-test.exe
+          retention-days: 30
