@@ -1061,12 +1061,16 @@ fn proof_8_1(ctx: &mut Ctx) -> Proof {
         let mut handler_first_ms_b: u64 = 0;
         let mut internal_ui_prev_b: u32 = 0;
         let mut external_ui_prev_non_null_b: bool = false;
+    let mut cancel_depth_b: Value = Value::Null;
+    let mut pre_b: Value = Value::Null;
         let mut trigger_b = "hand.stop";
         let mut status_b = String::new();
         let mut tree_dead_b = false;
         let mut survivors_b: Vec<Value> = Vec::new();
         if phase_a_status == "pass" {
             let _ = bimo_hand::msi::ensure_product_absent(code_a.as_deref(), name_sub, 120_000);
+        // Pre-command state for phase B, captured right before the phase-B install starts.
+        pre_b = bimo_hand::msi::pre_command_state(None, target_dir);
             if key == "vlc" {
                 // VLC phase B goes through the supervisor: MsiInstallProduct
                 // in a dedicated thread, monitored from the supervisor's
@@ -1091,6 +1095,7 @@ fn proof_8_1(ctx: &mut Ctx) -> Proof {
                         handler_first_ms_b = ab.get("handler_first_ms").and_then(|v| v.as_u64()).unwrap_or(0);
                         internal_ui_prev_b = ab.get("internal_ui_prev").and_then(|v| v.as_u64()).map(|v| v as u32).unwrap_or(0);
                         external_ui_prev_non_null_b = ab.get("external_ui_prev_non_null").and_then(|v| v.as_bool()).unwrap_or(false);
+            cancel_depth_b = ab.get("cancel_depth").cloned().unwrap_or(Value::Null);
                     }
                 } else {
                     status_b = "no-result".to_string();
@@ -1126,6 +1131,7 @@ fn proof_8_1(ctx: &mut Ctx) -> Proof {
                 handler_first_ms_b = outcome.handler_first_ms;
                 internal_ui_prev_b = outcome.internal_ui_prev;
                 external_ui_prev_non_null_b = outcome.external_ui_prev_non_null;
+        cancel_depth_b = outcome.cancel_depth.clone();
                 // The install thread's CancelOutcome is consumed by abort;
                 // handler_calls are recorded in the outcome note.
             }
@@ -1170,7 +1176,7 @@ fn proof_8_1(ctx: &mut Ctx) -> Proof {
             "installer": key, "name_substring": name_sub, "sha256": sha256,
             "product_code": code_a, "product_version": version_a,
             "phase_a": {"status": phase_a_status, "return_code": rc_a, "install_duration_ms": install_duration_ms, "uninstall_return_code": uninstall_rc, "product_absent_after_removal": absent_after_a, "target_folder_empty_after_removal": leftovers_a, "pre_command_state": pre_a},
-            "phase_b": {"status": phase_b_status, "trigger": trigger_b, "kill_ms_after_start": kill_ms, "stop_ms": stop_ms_b, "cancel_ms": cancel_ms_b, "forced_ms": cancel_ms_b, "return_code": return_code_b, "ui_calls": ui_calls_b, "result_status": status_b, "tree_dead": tree_dead_b, "survivors": survivors_b, "product_absent": absent_b, "mutex_free": mutex_free_b, "service_idle": service_idle_b, "target_folder_empty": leftovers_b, "handler_first_ms": handler_first_ms_b, "internal_ui_prev": internal_ui_prev_b, "external_ui_prev_non_null": external_ui_prev_non_null_b},
+            "phase_b": {"status": phase_b_status, "trigger": trigger_b, "kill_ms_after_start": kill_ms, "stop_ms": stop_ms_b, "cancel_ms": cancel_ms_b, "forced_ms": cancel_ms_b, "return_code": return_code_b, "ui_calls": ui_calls_b, "result_status": status_b, "tree_dead": tree_dead_b, "survivors": survivors_b, "product_absent": absent_b, "mutex_free": mutex_free_b, "service_idle": service_idle_b, "target_folder_empty": leftovers_b, "handler_first_ms": handler_first_ms_b, "internal_ui_prev": internal_ui_prev_b, "external_ui_prev_non_null": external_ui_prev_non_null_b, "cancel_depth": cancel_depth_b, "pre_command_state": pre_b},
         }));
     }
     let measured = json!({
