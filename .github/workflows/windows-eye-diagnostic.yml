@@ -1,0 +1,300 @@
+# Eye diagnostic run (council 13, cycle 56) — diagnosis FIRST, no fix yet.
+#
+# Purpose: name the signature of slice run 2's S0c failure. The eye's log
+# froze ~4 s after arming (last write 12:12:17Z, heartbeat seq 149), with
+# no agent.stop and no panic in stderr. Two code mechanisms produce that
+# signature exactly (council 13): (1) a write error breaks writer_loop,
+# (2) the channel closes when every producer dies. The diagnostic separates
+# them BY NAME: stderr tracing on writer_loop exit (condition 2) + liveness
+# observations at 15 s and 30 s + process-alive + heartbeat.json age at
+# stop time (condition 2 closes the stop-time observability gap).
+#
+# Design note (chair's disclosure): condition 1 says "one probe at ~15 s".
+# This workflow writes TWO probes at ~15 s — one directly in the watched
+# root, one inside a newly-created subdirectory — because a single probe in
+# a new subdir cannot separate "watcher dead" from "notify misses files in
+# subdirectories created after subscription" (H1, still source-unverified).
+# The two probes cost nothing extra and make the watcher verdict decisive
+# on every branch. Every binding element of condition 1 is kept: eye-only,
+# arm + 30 s idle + probe at ~15 s + stop, no install, no slice.
+#
+# Dispatch (condition 4): a TEMPORARY `push` trigger, path-filtered to
+# this file, fires the run ONCE on push; it is removed in a follow-up
+# commit immediately after the run fires. The spike workflow gets NO
+# trigger ever (cap "no run 5" preserved). workflow_dispatch is kept so
+# the workflow stays triggerable if it ever reaches main.
+#
+# Verdict: `diagnosed-<signature>` (job passes — the diagnosis succeeded)
+# or `inconclusive` (job fails — no signature named; run 3 still needs a
+# new council per condition 5). The verdict JSON is pushed to the
+# spike-results branch and the raw logs are uploaded as an artifact
+# (mandatory — the cycle-54 belt fix: a run whose raw log is missing
+# proves nothing).
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/windows-eye-diagnostic.yml'
+
+permissions:
+  contents: write
+
+env:
+  WATCH_PARENT: 'C:\bimo-slice'
+
+jobs:
+  diagnose:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: hand-thin-slice-c50
+
+      - name: Install Rust (stable + MSVC target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build eye for Windows
+        run: |
+          cargo build --release --target x86_64-pc-windows-msvc --locked -p bimo-eye
+
+      - name: D0 precheck (diag dir + watched parent)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $diagId = "diag-$env:GITHUB_RUN_ID"
+          $diagDir = "$env:RUNNER_TEMP\bimo-diag-$diagId"
+          $eyeData = "$diagDir\eye-data"
+          "DIAG_ID=$diagId" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "DIAG_DIR=$diagDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "EYE_DATA=$eyeData" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          New-Item -ItemType Directory -Force -Path $eyeData | Out-Null
+          # Same watched parent as the failing slice runs, so the result
+          # is comparable: the ONLY differences are the tracing + probe
+          # timing. The parent exists already (slice runs created it);
+          # create it if a fresh runner lacks it.
+          New-Item -ItemType Directory -Force -Path $env:WATCH_PARENT | Out-Null
+          Write-Host "D0 pass: diag dir $diagDir"
+
+      - name: D1 arm eye (same arming as slice S0b)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          . $env:GITHUB_WORKSPACE\.github\scripts\spike-log.ps1
+          $env:BIMO_EYE_PLAINTEXT_OK = "1"
+          $eyeExe = "$env:GITHUB_WORKSPACE\target\x86_64-pc-windows-msvc\release\bimo-eye-self-test.exe"
+          $proc = Start-Process -FilePath $eyeExe -ArgumentList @(
+            "--watch", "--data-dir", $env:EYE_DATA,
+            "--watch-dirs", $env:WATCH_PARENT,
+            "--snapshot-secs", "1", "--heartbeat-secs", "2",
+            "--max-secs", "1800"
+          ) -WindowStyle Hidden -PassThru -RedirectStandardOutput "$env:DIAG_DIR\eye-stdout.log" -RedirectStandardError "$env:DIAG_DIR\eye-stderr.log"
+          $eyePid = $proc.Id
+          $eyePid | Out-File -FilePath "$env:DIAG_DIR\eye-pid.txt" -Encoding utf8
+          $deadline = (Get-Date).AddSeconds(30)
+          $armed = $false
+          while ((Get-Date) -lt $deadline) {
+            $hb = "$env:EYE_DATA\heartbeat.json"
+            if (Test-Path $hb) {
+              $ts = (Get-Content $hb -Raw | ConvertFrom-Json).ts
+              $age = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($ts)).TotalSeconds
+              if ($age -lt 10) { $armed = $true; break }
+            }
+            Start-Sleep -Milliseconds 500
+          }
+          $armTs = [DateTimeOffset]::UtcNow
+          $armTs.ToString("o") | Out-File -FilePath "$env:DIAG_DIR\arm-ts.txt" -Encoding utf8
+          @{ diag_id = $env:DIAG_ID; armed = $armed; pid = $eyePid; arm_ts = $armTs.ToString("o") } | ConvertTo-Json | Out-File -FilePath "$env:DIAG_DIR\diag-arm.json" -Encoding utf8
+          if ($armed) { Write-Host "D1 pass: eye armed, pid $eyePid" } else { Write-Host "D1 FAIL: eye never armed (no fresh heartbeat in 30 s) — diagnosis continues, signature diagnosed-never-armed" }
+
+      - name: D2 idle 15 s + liveness snapshot
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          Start-Sleep -Seconds 15
+          $logPath = "$env:EYE_DATA\eye-events.jsonl"
+          $lines = 0; $lastTs = $null
+          if (Test-Path $logPath) {
+            $raw = Get-Content $logPath -ErrorAction SilentlyContinue
+            $lines = @($raw).Count
+            if ($lines -gt 0) { $lastTs = ($raw[-1] | ConvertFrom-Json -ErrorAction SilentlyContinue).ts }
+          }
+          $hbAge = $null; $alive = $false
+          $hb = "$env:EYE_DATA\heartbeat.json"
+          if (Test-Path $hb) {
+            $ts = (Get-Content $hb -Raw | ConvertFrom-Json).ts
+            $hbAge = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($ts)).TotalSeconds
+          }
+          $pid = [int](Get-Content "$env:DIAG_DIR\eye-pid.txt" -Raw).Trim()
+          $alive = $null -ne (Get-Process -Id $pid -ErrorAction SilentlyContinue)
+          @{ at = "15s"; log_lines = $lines; last_ts = $lastTs; heartbeat_age_secs = $hbAge; process_alive = $alive } | ConvertTo-Json | Out-File -FilePath "$env:DIAG_DIR\diag-liveness-15s.json" -Encoding utf8
+          Write-Host "D2: 15s liveness — lines=$lines last_ts=$lastTs hb_age=$hbAge alive=$alive"
+
+      - name: D3 probes at ~15 s (root + new subdir) + 10 s sense
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          . $env:GITHUB_WORKSPACE\.github\scripts\spike-log.ps1
+          # Probe A: directly in the watched root (the proven configuration:
+          # the eye self-test creates files directly in watched dirs).
+          $probeRoot = "$env:WATCH_PARENT\diag-probe-root-$env:DIAG_ID.exe"
+          New-Item -ItemType File -Force -Path $probeRoot | Out-Null
+          # Probe B: inside a subdirectory created AFTER arming (H1: does
+          # notify 7's Windows backend watch subdirs created after
+          # subscription?). Same 0-byte file as the slice S0c probe.
+          $probeDir = "$env:WATCH_PARENT\diag-probe-sub-$env:DIAG_ID"
+          New-Item -ItemType Directory -Force -Path $probeDir | Out-Null
+          $probeSub = "$probeDir\probe.exe"
+          New-Item -ItemType File -Force -Path $probeSub | Out-Null
+          $logPath = "$env:EYE_DATA\eye-events.jsonl"
+          $deadline = (Get-Date).AddSeconds(10)
+          $seenRoot = $false; $seenSub = $false; $logEncrypted = $false
+          while ((Get-Date) -lt $deadline) {
+            $events = Read-EyeLog -Path $logPath
+            if ($events.Count -gt 0 -and (@($events | Where-Object { $null -ne $_.type }).Count -eq 0)) {
+              $logEncrypted = $true
+              break
+            }
+            if (@($events | Where-Object { $_.path -eq $probeRoot -and $_.type -in @("file.completed", "install.detected") }).Count -ge 1) { $seenRoot = $true }
+            if (@($events | Where-Object { $_.path -eq $probeSub -and $_.type -in @("file.completed", "install.detected") }).Count -ge 1) { $seenSub = $true }
+            if ($seenRoot -and $seenSub) { break }
+            Start-Sleep -Milliseconds 500
+          }
+          Remove-Item -Force $probeRoot -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force $probeDir -ErrorAction SilentlyContinue
+          @{ probe_root = $probeRoot; probe_root_seen = $seenRoot; probe_sub = $probeSub; probe_sub_seen = $seenSub; log_encrypted = $logEncrypted } | ConvertTo-Json | Out-File -FilePath "$env:DIAG_DIR\diag-probes.json" -Encoding utf8
+          Write-Host "D3: root_seen=$seenRoot sub_seen=$seenSub log_encrypted=$logEncrypted"
+
+      - name: D4 idle to 30 s + liveness snapshot
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          # Arm was ~15 s before D3 + 10 s sense: ~5 s more reaches 30 s.
+          Start-Sleep -Seconds 5
+          $logPath = "$env:EYE_DATA\eye-events.jsonl"
+          $lines = 0; $lastTs = $null
+          if (Test-Path $logPath) {
+            $raw = Get-Content $logPath -ErrorAction SilentlyContinue
+            $lines = @($raw).Count
+            if ($lines -gt 0) { $lastTs = ($raw[-1] | ConvertFrom-Json -ErrorAction SilentlyContinue).ts }
+          }
+          $hbAge = $null; $alive = $false
+          $hb = "$env:EYE_DATA\heartbeat.json"
+          if (Test-Path $hb) {
+            $ts = (Get-Content $hb -Raw | ConvertFrom-Json).ts
+            $hbAge = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($ts)).TotalSeconds
+          }
+          $pid = [int](Get-Content "$env:DIAG_DIR\eye-pid.txt" -Raw).Trim()
+          $alive = $null -ne (Get-Process -Id $pid -ErrorAction SilentlyContinue)
+          @{ at = "30s"; log_lines = $lines; last_ts = $lastTs; heartbeat_age_secs = $hbAge; process_alive = $alive } | ConvertTo-Json | Out-File -FilePath "$env:DIAG_DIR\diag-liveness-30s.json" -Encoding utf8
+          Write-Host "D4: 30s liveness — lines=$lines last_ts=$lastTs hb_age=$hbAge alive=$alive"
+
+      - name: D5 stop eye + stop-time observations
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          New-Item -ItemType File -Force -Path "$env:EYE_DATA\eye.stop" | Out-Null
+          Start-Sleep -Seconds 5
+          $pid = [int](Get-Content "$env:DIAG_DIR\eye-pid.txt" -Raw).Trim()
+          $alive = $null -ne (Get-Process -Id $pid -ErrorAction SilentlyContinue)
+          if ($alive) { Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue }
+          $hbAge = $null
+          $hb = "$env:EYE_DATA\heartbeat.json"
+          if (Test-Path $hb) {
+            $ts = (Get-Content $hb -Raw | ConvertFrom-Json).ts
+            $hbAge = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($ts)).TotalSeconds
+          }
+          $logPath = "$env:EYE_DATA\eye-events.jsonl"
+          $lines = 0; $lastTs = $null; $hasAgentStop = $false
+          if (Test-Path $logPath) {
+            $raw = Get-Content $logPath -ErrorAction SilentlyContinue
+            $lines = @($raw).Count
+            if ($lines -gt 0) { $lastTs = ($raw[-1] | ConvertFrom-Json -ErrorAction SilentlyContinue).ts }
+            $hasAgentStop = @($raw | Where-Object { $_ -match '"type":"agent.stop"' }).Count -ge 1
+          }
+          # The writer_loop exit trace (council 13 condition 2): the exact
+          # stderr line names the exit — write error vs channel closed —
+          # or its ABSENCE names a third signature (process killed
+          # externally before the writer could exit).
+          $stderrLines = @()
+          if (Test-Path "$env:DIAG_DIR\eye-stderr.log") { $stderrLines = @(Get-Content "$env:DIAG_DIR\eye-stderr.log" -ErrorAction SilentlyContinue) }
+          $exitTrace = ($stderrLines | Where-Object { $_ -match 'writer_loop exit' }) -join "`n"
+          if ([string]::IsNullOrWhiteSpace($exitTrace)) { $exitTrace = $null }
+          $stoppedFile = Test-Path "$env:EYE_DATA\eye.stopped"
+          @{ process_alive_at_stop = $alive; heartbeat_age_at_stop_secs = $hbAge; log_lines = $lines; last_ts = $lastTs; has_agent_stop = $hasAgentStop; writer_exit_trace = $exitTrace; eye_stopped_file = $stoppedFile } | ConvertTo-Json | Out-File -FilePath "$env:DIAG_DIR\diag-stop.json" -Encoding utf8
+          Write-Host "D5: alive_at_stop=$alive hb_age=$hbAge lines=$lines agent_stop=$hasAgentStop exit_trace_present=$($null -ne $exitTrace)"
+
+      - name: D6 Defender note (cheap observation, never fails the run)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $rt = $null
+          try {
+            $st = Get-MpComputerStatus -ErrorAction Stop
+            $rt = $st.RealTimeProtectionEnabled
+          } catch { $rt = "unavailable" }
+          @{ defender_realtime_protection = $rt } | ConvertTo-Json | Out-File -FilePath "$env:DIAG_DIR\diag-defender.json" -Encoding utf8
+          Write-Host "D6: Defender real-time protection = $rt"
+
+      - name: D7 publish (assemble verdict JSON + push to spike-results)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $arm = Get-Content "$env:DIAG_DIR\diag-arm.json" -Raw | ConvertFrom-Json
+          $l15 = Get-Content "$env:DIAG_DIR\diag-liveness-15s.json" -Raw | ConvertFrom-Json
+          $pr = Get-Content "$env:DIAG_DIR\diag-probes.json" -Raw | ConvertFrom-Json
+          $l30 = Get-Content "$env:DIAG_DIR\diag-liveness-30s.json" -Raw | ConvertFrom-Json
+          $stop = Get-Content "$env:DIAG_DIR\diag-stop.json" -Raw | ConvertFrom-Json
+          $def = Get-Content "$env:DIAG_DIR\diag-defender.json" -Raw | ConvertFrom-Json
+          # Signature priority (writer death explains everything downstream,
+          # so it is named first; watcher verdicts only on a live log):
+          $signature = "inconclusive"; $reasons = @()
+          if (-not $arm.armed) { $signature = "diagnosed-never-armed"; $reasons += "eye never armed: no fresh heartbeat in 30 s (R9)" }
+          elseif ($pr.log_encrypted) { $signature = "diagnosed-log-encrypted"; $reasons += "log lines carry no type field (DPAPI wrappers): plaintext opt-in regressed" }
+          elseif ($null -ne $stop.writer_exit_trace -and $stop.writer_exit_trace -match 'write error') { $signature = "diagnosed-write-error"; $reasons += "writer_loop exited with a write error (exact stderr line in writer_exit_trace)" }
+          elseif ($null -ne $stop.writer_exit_trace -and $stop.writer_exit_trace -match 'channel closed') { $signature = "diagnosed-channel-closed"; $reasons += "writer_loop exited because the channel closed (all producers dropped)" }
+          elseif (-not $stop.process_alive_at_stop -and $null -eq $stop.writer_exit_trace) { $signature = "diagnosed-process-dead-no-trace"; $reasons += "process dead at stop time with NO writer exit trace: killed externally before the writer could exit" }
+          elseif ($stop.process_alive_at_stop -and $null -eq $stop.writer_exit_trace) { $signature = "diagnosed-writer-stuck"; $reasons += "process alive at stop time but no writer exit trace: writer thread stuck or already gone without a trace" }
+          elseif ($pr.probe_root_seen -and -not $pr.probe_sub_seen) { $signature = "diagnosed-new-subdir-blind-spot"; $reasons += "root probe sensed, subdir probe missed: notify misses files in subdirectories created after subscription (H1)" }
+          elseif (-not $pr.probe_root_seen -and -not $pr.probe_sub_seen -and $l30.heartbeat_age_secs -lt 10) { $signature = "diagnosed-watcher-silent"; $reasons += "log alive at 30 s (heartbeat fresh) but neither probe sensed: watcher itself silent" }
+          else { $reasons += "no signature rule matched" }
+          $verdict = $signature
+          $results = @{
+            run_id = $env:GITHUB_RUN_ID; diag_id = $env:DIAG_ID; verdict = $verdict; signature = $signature; reasons = $reasons
+            armed = $arm.armed; arm_ts = $arm.arm_ts; eye_pid = $arm.pid
+            liveness_15s = $l15; probes = $pr; liveness_30s = $l30; stop = $stop; defender = $def
+            runner_note = "does not prove device performance"
+          }
+          $results | ConvertTo-Json -Depth 10 | Out-File -FilePath "$env:DIAG_DIR\eye-diagnostic-results.json" -Encoding utf8
+          "EYE_DIAG_VERDICT=$verdict" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          # Push the verdict JSON to spike-results under a distinct name.
+          git config user.name "BIMO"
+          git config user.email "bimo@yassinsmr.local"
+          git fetch origin spike-results
+          git checkout spike-results
+          $resultsName = "eye-diagnostic-run-$env:GITHUB_RUN_ID.json"
+          Copy-Item "$env:DIAG_DIR\eye-diagnostic-results.json" $resultsName
+          git add $resultsName
+          git commit -m "eye diagnostic run $env:GITHUB_RUN_ID`: verdict $verdict" --allow-empty
+          git push origin spike-results
+          Write-Host "D7: eye-diagnostic-results.json pushed as $resultsName (verdict=$verdict)"
+
+      - name: D8 upload diagnostic results + raw logs (mandatory)
+        uses: actions/upload-artifact@v4
+        with:
+          name: eye-diagnostic-run-${{ github.run_id }}
+          path: |
+            ${{ env.DIAG_DIR }}\eye-diagnostic-results.json
+            ${{ env.EYE_DATA }}\eye-events.jsonl
+            ${{ env.DIAG_DIR }}\eye-stdout.log
+            ${{ env.DIAG_DIR }}\eye-stderr.log
+            ${{ env.DIAG_DIR }}\diag-*.json
+          if-no-files-found: error
+
+      - name: D9 diagnostic verdict gate
+        shell: pwsh
+        run: |
+          if ($env:EYE_DIAG_VERDICT -notlike "diagnosed-*") { throw "eye diagnostic: inconclusive — no signature named; run 3 still needs a new council (condition 5)" }
+          Write-Host "eye diagnostic: $($env:EYE_DIAG_VERDICT)"

@@ -357,21 +357,34 @@ fn writer_loop(
     dropped_events: Arc<AtomicU64>,
     dropped_hashes: Arc<AtomicU64>,
 ) {
-    while let Ok(ev) = rx.recv() {
+    // Council-13 diagnostic tracing (cycle 56): name the writer's exit
+    // so a frozen log can be told apart from a dead channel. Tracing
+    // only — no behaviour change; the resilient-writer fix awaits
+    // council 14.
+    let mut exit_reason = "channel closed (all producers dropped)";
+    'recv: loop {
+        let ev = match rx.recv() {
+            Ok(ev) => ev,
+            Err(_) => break 'recv,
+        };
         // Record our own gaps BEFORE the event that follows them.
         if let Some(gap) =
             take_gap_event(&dropped_events, "event queue full: routine proc.* events dropped")
         {
-            if writer.write(&gap).is_err() {
-                break;
+            if let Err(e) = writer.write(&gap) {
+                exit_reason = "write error";
+                eprintln!("[eye] writer_loop exit: write error: {e}");
+                break 'recv;
             }
         }
         if let Some(gap) = take_gap_event(
             &dropped_hashes,
             "hash queue full: hash requests dropped (files will be re-hashed on next completion)",
         ) {
-            if writer.write(&gap).is_err() {
-                break;
+            if let Err(e) = writer.write(&gap) {
+                exit_reason = "write error";
+                eprintln!("[eye] writer_loop exit: write error: {e}");
+                break 'recv;
             }
         }
         let mut extra: Option<EyeEvent> = None;
@@ -385,17 +398,22 @@ fn writer_loop(
                 dropped_hashes.fetch_add(1, Ordering::Relaxed);
             }
         }
-        if writer.write(&ev).is_err() {
+        if let Err(e) = writer.write(&ev) {
             // The log is the product: if it cannot be written, there is
             // nothing sensible left to do but stop.
-            break;
+            exit_reason = "write error";
+            eprintln!("[eye] writer_loop exit: write error: {e}");
+            break 'recv;
         }
         if let Some(ev2) = extra {
-            if writer.write(&ev2).is_err() {
-                break;
+            if let Err(e) = writer.write(&ev2) {
+                exit_reason = "write error";
+                eprintln!("[eye] writer_loop exit: write error: {e}");
+                break 'recv;
             }
         }
     }
+    eprintln!("[eye] writer_loop exit: {exit_reason}");
     // Flush any gaps recorded after the last received event.
     if let Some(gap) =
         take_gap_event(&dropped_events, "event queue full: routine proc.* events dropped")
@@ -408,9 +426,13 @@ fn writer_loop(
     ) {
         let _ = writer.write(&gap);
     }
-    let _ = writer.write(&EyeEvent::AgentStop {
+    if let Err(e) = writer.write(&EyeEvent::AgentStop {
         reason: "eye.stop".to_string(),
-    });
+    }) {
+        // Council-13 tracing: if the writer is broken, the stop event
+        // fails too — say so on stderr instead of vanishing silently.
+        eprintln!("[eye] writer_loop exit: agent.stop also failed: {e}");
+    }
     writer.close();
 }
 
