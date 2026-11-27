@@ -420,6 +420,14 @@ pub mod msi {
         1603
     }
 
+    /// Non-Windows stub for the capture-only MSI log enable (cycle 64,
+    /// council 21 D1(3)): MSI logging does not exist here; returns 0 so
+    /// the supervisor call compiles and the diagnostic path stays uniform.
+    pub fn enable_install_log(log_path: &std::path::Path) -> u32 {
+        let _ = log_path;
+        0
+    }
+
     pub fn find_product_by_name(name_substring: &str) -> Option<(String, String)> {
         let _ = name_substring;
         None

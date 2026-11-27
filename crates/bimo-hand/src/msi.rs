@@ -156,10 +156,27 @@ extern "system" {
   fn MsiGetProductInfoW(product: *const u16, property: *const u16, value: *mut u16, len: *mut u32) -> u32;
   fn MsiQueryProductStateW(product: *const u16) -> i32;
   fn MsiConfigureProductW(product: *const u16, level: i32, state: i32) -> u32;
+  fn MsiEnableLogW(log_mode: u32, log_file: *const u16, attributes: u32) -> u32;
 }
 
 pub const ERROR_INSTALL_USEREXIT: u32 = 1602;
 pub const INSTALLSTATE_ABSENT: i32 = 2;
+// INSTALLLOGMODE_VERBOSE (0x400): the /L*v log. INSTALLLOGATTRIBUTES_FLUSHEACHLINE (0x2).
+pub const INSTALLLOGMODE_VERBOSE: u32 = 0x400;
+pub const INSTALLLOGATTRIBUTES_FLUSHEACHLINE: u32 = 0x2;
+
+/// Enable the verbose MSI log for installs performed by THIS process
+/// (cycle 64, council 21 D1(3) — capture-only). MsiEnableLog does NOT
+/// change the install invocation: MsiInstallProductW and its command
+/// line (REBOOT=ReallySuppress TARGETDIR=...) stay byte-identical; it
+/// only records the installer's own log to `log_path`. Returns the MSI
+/// return code (0 = logging enabled). The log file is written by the
+/// installer engine as the install runs; the caller copies it out
+/// before any later phase can touch it.
+pub fn enable_install_log(log_path: &std::path::Path) -> u32 {
+    let path = wide(&log_path.to_string_lossy());
+    unsafe { MsiEnableLogW(INSTALLLOGMODE_VERBOSE, path.as_ptr(), INSTALLLOGATTRIBUTES_FLUSHEACHLINE) }
+}
 
 fn wide_string(buf: &[u16]) -> String {
   let end = buf.iter().position(|c| *c == 0).unwrap_or(buf.len());

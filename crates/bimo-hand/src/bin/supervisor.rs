@@ -439,6 +439,14 @@ fn handle_msi_request(req: &ExecRequest, ctl: &HandControl, data_dir: &Path, sta
     };
     let pre_state = bimo_hand::msi::pre_command_state(req.product_code.as_deref(), &target_dir);
     let pre_msiexec: Vec<u32> = bimo_hand::win32::msiexec_processes().iter().map(|p| p.pid).collect();
+    // Cycle 64, council 21 D1(3) — capture-only MSI verbose log.
+    // MsiEnableLog enables logging for THIS process's installs WITHOUT
+    // changing the MsiInstallProduct invocation or its command line
+    // (TARGETDIR travels unchanged). The log lands in the hand data
+    // dir so the workflow's diagnostic step can copy it into the
+    // artifact before S7. rc 0 = logging enabled.
+    let msi_log_path = data_dir.join("msi-install.log");
+    let msi_log_enable_rc = bimo_hand::msi::enable_install_log(&msi_log_path);
     let (cancel, outcome_slot) = sup::run_msi_install_in_thread_cmdline(msi_path.clone(), cmdline);
     loop {
         if ctl.stop_present() {
@@ -502,6 +510,7 @@ fn handle_msi_request(req: &ExecRequest, ctl: &HandControl, data_dir: &Path, sta
             let _ = write_json_file(&result_path, &json!({
                 "id": req.id, "status": status, "return_code": o.return_code,
                 "cancel_ms": o.cancel_ms, "handler_calls": o.handler_calls,
+                "msi_log_enable_rc": msi_log_enable_rc,
                 "pre_command_state": pre_state,
                 "supervisor_rehash": rehash_json,
                 "duration_ms": started_at.elapsed().as_millis() as u64,

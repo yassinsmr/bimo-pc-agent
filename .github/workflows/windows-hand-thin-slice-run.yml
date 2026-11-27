@@ -55,6 +55,33 @@
 # failure mechanism stays open (H5). S1.6/S6/S7 ProductState calls are
 # NOT touched — outside the named block.
 #
+# DIAGNOSTIC RUN (cycle 64, council 21, conditions D1–D5): run 6
+# passed S1 fully (first complete S1; ProductCode read via P/Invoke)
+# and failed at a NEW point — S6 `install-location-missing`: TWO
+# layers at once (ProductInfo(InstallLocation) returned "" AND the
+# custom folder does not exist at all after a "successful" install,
+# ProductState 5). Council 21 verdict (a): ONE diagnostic run with a
+# NAMED capture list, then council 22 decides the fix from named
+# facts. D1: capture-only change — a new step S-DIAG between S3 and
+# S6 collecting (1) recursive listings of C:\bimo-slice +
+# C:\Program Files\Notepad++ + C:\Program Files (x86)\Notepad++;
+# (2) the uninstall key (InstallLocation, DisplayName,
+# UninstallString) read BEFORE S7; (3) the MSI /L*v log, enabled via
+# MsiEnableLog in the supervisor (msi.rs) so the MsiInstallProduct
+# invocation and its command line stay byte-identical; (4) notepad++.exe
+# presence in the named locations only; (5) MsiGetProductInfo
+# (P/Invoke) crossed with ProductInfo (COM). No change to the install
+# invocation, no change to S6 pass/fail logic. The S8 cosmetic fix
+# (`$($env:GITHUB_RUN_ID)` in the commit message) rides in the same
+# edit (zero risk). D2: S-DIAG sits between S3 and S6; its outputs are
+# published even if S6 fails; the timeout ceiling is re-checked
+# (2430 s, margin 270 s). D3: this diagnostic run alone is authorized;
+# NO slice (fix) run without council 22. D4: council-22 decision tree
+# is fixed in advance (default → fix (c); sub-path → fix check path;
+# right place without InstallLocation → fix (b); no files at all →
+# spec-level rethink, neither (b) nor (c)). D5: both S6 mechanism
+# questions stay open until the named facts close them.
+#
 # Execution order note: the spec numbers S4 (witness), S5 (shot),
 # S6 (strong evidence) in that order, but S4's window needs s6_ts
 # (written by S6) and S5 runs after S6 (§29.3). The live step
@@ -90,14 +117,17 @@
 
 name: windows-hand-thin-slice-run
 
-# NOTE (cycle 63): `workflow_dispatch` ONLY. The temporary `push`
-# trigger was removed after slice run 6 fired (run 46056374607).
+# NOTE (cycle 64): `workflow_dispatch` + a TEMPORARY `push` trigger
+# for ONE push (the diagnostic run). The push trigger is removed
+# immediately after the diagnostic run fires, as in cycles 60–63.
 # GitHub's web UI lists workflows from the default branch only, and
 # this file lives on hand-thin-slice-c50 — so it cannot be dispatched
 # from the UI, and no API token exists on this machine (gh is not
 # logged in; the GitHub connector returns 403).
 on:
   workflow_dispatch:
+  push:
+    branches: [hand-thin-slice-c50]
 
 permissions:
   contents: write
@@ -161,6 +191,7 @@ jobs:
             @{ item = "S1 fetch (5 x curl --max-time 120)"; secs = 600 }
             @{ item = "S1 GPG + Authenticode + P/Invoke"; secs = 120 }
             @{ item = "Phase 1 install (S2+S3)"; secs = 600 }
+            @{ item = "S-DIAG capture (listing + registry + MSI log)"; secs = 60 }
             @{ item = "S6 + S4 + S5"; secs = 180 }
             @{ item = "S7 revert"; secs = 600 }
             @{ item = "stop eye + S8 assemble/publish"; secs = 180 }
@@ -383,6 +414,8 @@ jobs:
               '  public static extern uint MsiViewFetch(IntPtr hView, out IntPtr phRecord);',
               '  [DllImport("msi.dll", CharSet = CharSet.Unicode)]',
               '  public static extern uint MsiRecordGetString(IntPtr hRecord, uint iField, StringBuilder szValueBuf, ref uint pcchValueBuf);',
+              '  [DllImport("msi.dll", CharSet = CharSet.Unicode)]',
+              '  public static extern uint MsiGetProductInfo(string szProduct, string szProperty, StringBuilder lpValueBuf, ref uint pcchValueBuf);',
               '  [DllImport("msi.dll")]',
               '  public static extern uint MsiCloseHandle(IntPtr hAny);',
               '}'
@@ -458,6 +491,94 @@ jobs:
             }
             if ($phase1Code -ne 0) { Fail "Phase 1 fail: 8.12 install exited $phase1Code (see hand-slice.json)" }
             Write-Host "Phase 1 pass: negatives + S2+S3 done"
+            # --- S-DIAG diagnostic capture (cycle 64, council 21 D1/D2) ---
+            # Capture-only: runs between S3 and S6, BEFORE S7 can wipe
+            # the uninstall key. NEVER throws: every capture is wrapped
+            # so a failed capture is recorded as a field, never a step
+            # failure — S6 must still run and judge the install, and
+            # the captures must be published even if S6 fails (D2).
+            # The five D1 items: (1) recursive listings of the three
+            # named roots; (2) uninstall key read before S7;
+            # (3) MSI /L*v log (enabled via MsiEnableLog in the
+            # supervisor — the install invocation is untouched);
+            # (4) notepad++.exe presence in the named locations only;
+            # (5) MsiGetProductInfo (P/Invoke) crossed with the COM
+            # ProductInfo read S6 makes next.
+            Write-Checkpoint "S-DIAG" "enter"
+            $diag = @{ step = "S-DIAG"; council = "21"; conditions = @("D1", "D2") }
+            $diagErrors = @()
+            # (1) Recursive listings of the three named roots.
+            $diagRoots = @($env:WATCH_PARENT, "C:\Program Files\Notepad++", "C:\Program Files (x86)\Notepad++")
+            $listingLines = [System.Collections.ArrayList]::new()
+            $listingSummary = @()
+            foreach ($root in $diagRoots) {
+              $rootExists = Test-Path $root
+              $entries = @()
+              if ($rootExists) {
+                try {
+                  $all = Get-ChildItem -Recurse -Force -Path $root -ErrorAction Stop | Select-Object -First 2000
+                  $entries = @($all | ForEach-Object { $_.FullName })
+                  if ($all.Count -ge 2000) { $diagErrors += "listing-truncated: $root (2000+ entries)" }
+                } catch { $diagErrors += "listing-failed: $root ($($_.Exception.Message))" }
+              }
+              [void]$listingLines.Add("== $root (exists=$rootExists, entries=$($entries.Count))")
+              foreach ($e in $entries) { [void]$listingLines.Add($e) }
+              $listingSummary += @{ root = $root; exists = $rootExists; entries = $entries.Count }
+            }
+            try { $listingLines | Out-File -FilePath "$sliceDir\diag-listing.txt" -Encoding utf8 } catch { $diagErrors += "listing-write-failed: $($_.Exception.Message)" }
+            $diag.listing = $listingSummary
+            # (2) Uninstall key read BEFORE S7 (S7 wipes it).
+            $unKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$code"
+            $unKeyPresent = Test-Path $unKey
+            $unVals = @{ key_present = $unKeyPresent; install_location = $null; display_name = $null; uninstall_string = $null }
+            if ($unKeyPresent) {
+              try {
+                $props = Get-ItemProperty -Path $unKey -ErrorAction Stop
+                $unVals.install_location = $props.InstallLocation
+                $unVals.display_name = $props.DisplayName
+                $unVals.uninstall_string = $props.UninstallString
+              } catch { $diagErrors += "uninstall-key-read-failed: $($_.Exception.Message)" }
+            }
+            try { $unVals | ConvertTo-Json | Out-File -FilePath "$sliceDir\diag-uninstall-key.json" -Encoding utf8 } catch { $diagErrors += "uninstall-key-write-failed: $($_.Exception.Message)" }
+            $diag.uninstall_key = $unVals
+            # (3) MSI /L*v log: copy from the hand data dir before S7.
+            $msiLogSrc = "$handData\msi-install.log"
+            $msiLogPresent = Test-Path $msiLogSrc
+            $msiLogSize = $null
+            if ($msiLogPresent) {
+              try {
+                Copy-Item $msiLogSrc "$sliceDir\msi-install.log" -Force -ErrorAction Stop
+                $msiLogSize = (Get-Item "$sliceDir\msi-install.log").Length
+              } catch { $diagErrors += "msi-log-copy-failed: $($_.Exception.Message)" }
+            }
+            $diag.msi_log = @{ present_in_hand_data = $msiLogPresent; copied_size_bytes = $msiLogSize }
+            # (4) notepad++.exe presence in the named locations ONLY.
+            $exeByRoot = @()
+            foreach ($root in $diagRoots) {
+              $found = $null
+              if (Test-Path $root) {
+                try { $found = Get-ChildItem -Recurse -Filter "notepad++.exe" -Path $root -ErrorAction SilentlyContinue | Select-Object -First 1 } catch {}
+              }
+              $exeByRoot += @{ root = $root; exe_present = ($null -ne $found); exe_path = $(if ($null -ne $found) { $found.FullName } else { $null }) }
+            }
+            $diag.exe_by_root = $exeByRoot
+            # (5) MsiGetProductInfo (P/Invoke) — the cross-check half;
+            # the COM half is S6's ProductInfo, read next.
+            $msiLoc5 = $null; $msiLocRc5 = $null
+            try {
+              $len5 = [uint]1024
+              $sb5 = New-Object System.Text.StringBuilder 1024
+              $msiLocRc5 = [MsiNative]::MsiGetProductInfo($code, "InstallLocation", $sb5, [ref]$len5)
+              if ($msiLocRc5 -eq 234) {
+                $sb5 = New-Object System.Text.StringBuilder ([int]$len5)
+                $msiLocRc5 = [MsiNative]::MsiGetProductInfo($code, "InstallLocation", $sb5, [ref]$len5)
+              }
+              if ($msiLocRc5 -eq 0) { $msiLoc5 = $sb5.ToString() }
+            } catch { $diagErrors += "msi-get-product-info-failed: $($_.Exception.Message)" }
+            $diag.msi_get_product_info = @{ rc = $msiLocRc5; install_location = $msiLoc5 }
+            $diag.errors = $diagErrors
+            try { $diag | ConvertTo-Json -Depth 5 | Out-File -FilePath "$sliceDir\diag.json" -Encoding utf8 } catch { Write-Host "S-DIAG: diag.json write failed: $($_.Exception.Message)" }
+            Write-Host "S-DIAG done: listing roots=$($listingSummary.Count), uninstall_key_present=$unKeyPresent, msi_log_present=$msiLogPresent, errors=$($diagErrors.Count)"
             # --- S6 verify install (strong evidence; runs before S4/S5) ---
             Write-Checkpoint "S6" "enter"
             $inst3 = New-Object -ComObject WindowsInstaller.Installer
@@ -586,6 +707,7 @@ jobs:
             $winF = Read-JsonOrNull "$sliceDir\slice-window.json"
             $s6F = Read-JsonOrNull "$sliceDir\s6.json"
             $s7F = Read-JsonOrNull "$sliceDir\s7.json"
+            $diagF = Read-JsonOrNull "$sliceDir\diag.json"
             $timeoutCheck = Read-JsonOrNull "$sliceDir\slice-timeout-check.json"
             $verdict = "pass"
             $reasons = @()
@@ -641,6 +763,7 @@ jobs:
               slice_window = $winF
               s6 = $s6F
               s7 = $s7F
+              diag = $diagF
               checkpoints = $checkpoints
               timeout_check = $timeoutCheck
               eye_exit = @{ pid = $eyePid; exit_code = $eyeExitCode; exited_on_stop = $eyeStoppedOk; alive_before_stop = $eyeAliveBeforeStop; killed_by_stop = $eyeKilledByStop; lifetime = $eyeLifetimeDisplay }
@@ -659,7 +782,7 @@ jobs:
             git checkout spike-results
             Copy-Item "$sliceDir\slice-results.json" $resultsName
             git add $resultsName
-            git commit -m "slice run $env:GITHUB_RUN_ID: verdict $verdict" --allow-empty
+            git commit -m "slice run $($env:GITHUB_RUN_ID): verdict $verdict" --allow-empty
             git push origin spike-results
             Write-Host "S8: slice-results.json pushed as $resultsName (verdict=$verdict)"
           }
@@ -684,6 +807,10 @@ jobs:
             ${{ env.SLICE_DIR }}\shot-check.json
             ${{ env.SLICE_DIR }}\s6.json
             ${{ env.SLICE_DIR }}\s7.json
+            ${{ env.SLICE_DIR }}\diag.json
+            ${{ env.SLICE_DIR }}\diag-listing.txt
+            ${{ env.SLICE_DIR }}\diag-uninstall-key.json
+            ${{ env.SLICE_DIR }}\msi-install.log
             ${{ env.SLICE_DIR }}\slice-checkpoints.json
             ${{ env.SLICE_DIR }}\slice-timeout-check.json
             ${{ env.SLICE_DIR }}\gpg-version.txt
