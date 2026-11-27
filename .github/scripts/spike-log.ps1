@@ -83,6 +83,75 @@ function Wait-EyeEventMs {
   return $null
 }
 
+# ---------------------------------------------------------------------------
+# Pulse-file helpers (council 15, cycle 58, measurement run 4).
+#
+# The diagnostic control and monitor write timestamped disk pulses
+# every 500 ms while alive (diag-control-pulse.ps1, diag-monitor.ps1).
+# A pulse file is appended one ISO-8601 line per pulse; a torn final
+# line (process killed mid-flush) is expected, so readers take the
+# last PARSEABLE line and never invent one. Reads use the same
+# FileShare.ReadWrite open as Read-EyeLogLines: the writer appends
+# with the file briefly held, and a default Get-Content open can hit
+# a sharing violation mid-write.
+# ---------------------------------------------------------------------------
+
+# All parseable pulse timestamps in a file (oldest first). Returns @()
+# when the file is missing or unreadable after 3 attempts — never
+# throws, so a missing pulse file reads as "no pulses", not as a crash.
+function Read-PulseTimes {
+  param([string]$Path)
+  $tries = 0
+  while ($true) {
+    try {
+      if (-not (Test-Path $Path)) { return @() }
+      $fs = [System.IO.File]::Open($Path, 'Open', 'Read', 'ReadWrite')
+      $sr = New-Object System.IO.StreamReader($fs)
+      try { $text = $sr.ReadToEnd() } finally { $sr.Close() }
+      break
+    } catch {
+      $tries++
+      if ($tries -ge 3) { return @() }
+      Start-Sleep -Milliseconds 200
+    }
+  }
+  $times = @()
+  foreach ($line in ($text -split "`r?`n")) {
+    if ([string]::IsNullOrWhiteSpace($line)) { continue }
+    $t = [DateTimeOffset]::MinValue
+    if ([DateTimeOffset]::TryParse($line.Trim(), [ref]$t)) { $times += $t }
+  }
+  return $times
+}
+
+# Last parseable pulse timestamp, or $null when there is none.
+function Get-LastPulse {
+  param([string]$Path)
+  $times = Read-PulseTimes -Path $Path
+  if ($times.Count -eq 0) { return $null }
+  return $times[-1]
+}
+
+# Pulse statistics for the death-bound regularity check:
+# @{ count; last_ts (ISO string or $null); max_gap_secs ($null unless
+# at least 2 pulses) }. A max gap > 1 s while the process was alive
+# breaks the regularity assumption the death bound rests on.
+function Get-PulseStats {
+  param([string]$Path)
+  $stats = @{ count = 0; last_ts = $null; max_gap_secs = $null }
+  $times = Read-PulseTimes -Path $Path
+  $stats.count = $times.Count
+  if ($times.Count -eq 0) { return $stats }
+  $stats.last_ts = $times[-1].ToString("o")
+  $maxGap = 0
+  for ($i = 1; $i -lt $times.Count; $i++) {
+    $gap = ($times[$i] - $times[$i-1]).TotalSeconds
+    if ($gap -gt $maxGap) { $maxGap = $gap }
+  }
+  if ($times.Count -gt 1) { $stats.max_gap_secs = [Math]::Round($maxGap, 3) }
+  return $stats
+}
+
 # F3/F4 (council fix, run 2): the LOUD readability probe. Unlike
 # Read-EyeLog (a polling helper that silently returns @() while the
 # file is still appearing), this throws when the log file is missing

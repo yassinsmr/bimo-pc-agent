@@ -1,43 +1,74 @@
-# Eye diagnostic run 3 (council 14, cycle 57) — diagnosis FIRST, no fix yet.
+# Eye diagnostic measurement run 4 (council 15, cycle 58) — measure FIRST, no fix yet.
 #
-# Purpose: name the killer of the eye on the runner. Diagnostic runs 1
-# and 2 both named the same signature, diagnosed-process-dead-no-trace:
-# the eye dies ~4 s after arming, with no writer_loop exit trace, no
-# panic, and Defender real-time protection OFF. Council 14 ruled (a)
-# amended: investigate FIRST with a control pair + an exit-code capture
-# that survives the steps — because the ~4 s death coincides with the
-# end of the arming step (D1), and nobody has yet shown whether the eye
-# is a child of the arming step (killed when the step ends) or separate.
-# The control is the discriminator: a trivial process launched the
-# EXACT same way (same step, same Start-Process form) that sleeps 45 s.
-# If the control dies early too, the killer is in the launch/step
-# environment, not in the eye. If the control lives and the eye dies,
-# the killer is eye-specific. No eye code changes in this run (the
-# flexible writer stays suspended as a first fix — condition C4).
+# Purpose: capture the one fact council 15 ruled missing after run 3
+# named diagnosed-control-dead-early: the DEATH TIME of each process
+# (eye / control / monitor), bounded within ONE second, plus its exit
+# code where capturable. Run 3 proved the killer is in the launch/step
+# environment (the control and the monitor — neither runs our code —
+# died too), but the control's death was only bounded by a ~20 s
+# window and no exit code was ever captured, so (a) could not be
+# adopted: a fix built on an unnamed killing mechanism may be a false
+# success (h4 — death tied to the parent step). Council 16 decides
+# the fix from the measured fact; this run measures it.
 #
-# C2: a monitor process launched inside the arming step itself (D1)
-# holds Process objects for the eye and the control and writes each
-# exit code + exit time to a file. D1 also records its own step-end
-# time (arm_step_end_ts) against the last log write. If the run returns
-# no exit code AND no event-log entry, the verdict is
-# inconclusive-by-design — not evidence for any killer.
+# Design (council 15, binding — from the dissenter's condition 2):
+# - The control no longer sleeps silently: it runs a pulse loop
+#   (diag-control-pulse.ps1) writing a timestamped disk pulse every
+#   500 ms for the same 45 s, launched the EXACT same way as in run 3
+#   (same step, same Start-Process form). While alive it writes every
+#   500 ms, so its last pulse is at most ~500 ms before its death.
+# - The monitor writes its own disk pulses every 500 ms while waiting
+#   (WaitForExit(500) polling loop in diag-monitor.ps1), so ITS death
+#   is dated too — run 3's monitor died with the arming step and left
+#   no trace of when.
+# - The eye's heartbeat is 1 s in this run (was 2 s): a workflow-arg
+#   change ONLY (M3 — no eye code change), so the eye's own death is
+#   boundable within 1 s by its heartbeat cadence + its log cadence.
+# - Every later step records its wall-clock START time (step_start_ts)
+#   and its liveness-check time (check_ts), so the verdict can answer
+#   the chair's question: did the processes die at the END of D1, or
+#   at the START of D2? A last pulse AFTER D2's start means the
+#   process was alive when D2 started — it did not die at D1's end.
 #
-# Dispatch: the TEMPORARY `push` trigger was removed in this commit,
-# immediately after diagnostic run 3 fired on it (run 46008686608,
-# verdict diagnosed-control-dead-early). The spike workflow gets NO
+# Success criterion (M1): death times bounded ≤ 1 s for ALL THREE
+# processes (and exit code where capturable). A run that returns
+# without bounded death times is recorded `inconclusive-by-design` —
+# NOT as evidence for any killer — and the matter goes to council 16
+# with the same question, no 5th diagnostic without that council.
+# The bound rests on pulse/heartbeat REGULARITY while alive: D7
+# checks the max inter-pulse gap and falsifies the bound if any step
+# observed a process alive more than 1 s after its last alive write.
+#
+# Binding conditions (council 15, M1–M5, all "prevents a named harm"):
+# M1 — bounded death times ≤ 1 s for all three, or no verdict (above).
+# M2 — no adoption of (a), no slice run 3, no build of (b) until
+#      council 16 rules on the measured fact.
+# M3 — workflow change ONLY in this run: no eye code change and no new
+#      launch mechanism (the pulse loop and the WaitForExit polling
+#      are the same launch forms, only the waited-on work changed).
+# M4 — BIMO_EYE_PLAINTEXT_OK inside the step only, never job/machine
+#      scope, never on the Legion path. (Standing rule, carried.)
+# M5 — any future success of (a) is tagged explicitly: "does not prove
+#      eye survival outside a live step nor device performance".
+#      (Closes on arrival day.)
+# Standing rule: the TEMPORARY push trigger is for ONE push only and
+# is removed immediately after run 4 fires; the spike workflow gets NO
 # trigger ever. workflow_dispatch is kept so the workflow stays
 # triggerable if it ever reaches main.
 #
-# Verdict: `diagnosed-<signature>` (job passes — the diagnosis
+# Verdict: `diagnosed-<signature>` (job passes — the measurement
 # succeeded) or `inconclusive` / `inconclusive-by-design` (job fails —
-# no signature named; per condition C5 this is the LAST diagnostic in
-# this question: the matter goes to council 15, no 4th diagnostic and
-# no slice run 3 without that council). The verdict JSON is pushed to
-# the spike-results branch and the raw logs are uploaded as an artifact
-# (mandatory — the cycle-54 belt fix: a run whose raw log is missing
-# proves nothing).
+# no bounded measurement; per M1 the matter goes to council 16, no
+# 5th diagnostic and no slice run 3 without it). The verdict JSON is
+# pushed to the spike-results branch and the raw logs are uploaded as
+# an artifact (mandatory — the cycle-54 belt fix: a run whose raw log
+# is missing proves nothing).
 on:
   workflow_dispatch:
+  push:
+    branches: [hand-thin-slice-c50]
+    # TEMPORARY (council 15 standing rule): remove immediately after
+    # measurement run 4 fires on this push. One push only.
 
 permissions:
   contents: write
@@ -92,35 +123,47 @@ jobs:
           $proc = Start-Process -FilePath $eyeExe -ArgumentList @(
             "--watch", "--data-dir", $env:EYE_DATA,
             "--watch-dirs", $env:WATCH_PARENT,
-            "--snapshot-secs", "1", "--heartbeat-secs", "2",
+            "--snapshot-secs", "1", "--heartbeat-secs", "1",
             "--max-secs", "1800"
           ) -WindowStyle Hidden -PassThru -RedirectStandardOutput "$env:DIAG_DIR\eye-stdout.log" -RedirectStandardError "$env:DIAG_DIR\eye-stderr.log"
+          # NOTE (run 4, M3): --heartbeat-secs is 1 s here (was 2 s in
+          # runs 1–3) — a WORKFLOW-ARG change only, no eye code change:
+          # the eye's own death must be boundable within 1 s by its
+          # heartbeat cadence + its log cadence (council 15, M1).
           $eyePid = $proc.Id
           $eyePid | Out-File -FilePath "$env:DIAG_DIR\eye-pid.txt" -Encoding utf8
           $eyeLaunchTs = [DateTimeOffset]::UtcNow
           # C1 — CONTROL (same step, same Start-Process form): a trivial
-          # process that sleeps 45 s, far past the ~4 s window in which
-          # the eye died in runs 1 and 2. If it dies early too, the
-          # killer is in the launch/step environment, not in the eye.
-          # Launched BEFORE the arm-wait loop so its 45 s clock starts
-          # with the eye's, and so the monitor below attaches in time.
+          # process that runs 45 s, far past the ~4 s window in which
+          # the eye died in runs 1–3. If it dies early too, the killer
+          # is in the launch/step environment, not in the eye.
+          # MEASUREMENT RUN 4: the control no longer sleeps silently —
+          # it runs diag-control-pulse.ps1, writing a timestamped disk
+          # pulse every 500 ms, so its own death is dated within a
+          # second (council 15 design). Launched BEFORE the arm-wait
+          # loop so its 45 s clock starts with the eye's, and so the
+          # monitor below attaches in time.
           $controlProc = Start-Process -FilePath $pwsh -ArgumentList @(
-            "-NoProfile", "-Command", "Start-Sleep -Seconds 45"
+            "-NoProfile", "-File", "$env:GITHUB_WORKSPACE\.github\scripts\diag-control-pulse.ps1",
+            "-PulseFile", "$env:DIAG_DIR\control-pulse.log", "-Seconds", "45"
           ) -WindowStyle Hidden -PassThru -RedirectStandardOutput "$env:DIAG_DIR\control-stdout.log" -RedirectStandardError "$env:DIAG_DIR\control-stderr.log"
           $controlPid = $controlProc.Id
           $controlPid | Out-File -FilePath "$env:DIAG_DIR\control-pid.txt" -Encoding utf8
           $controlLaunchTs = [DateTimeOffset]::UtcNow
           # C2 — MONITOR (same step, detached): holds Process objects
           # for both pids and writes each exit code + exit time to a
-          # file. Launched immediately after the eye so it can attach
-          # before the ~4 s death window closes.
+          # file. MEASUREMENT RUN 4: while waiting it also writes its
+          # own disk pulses every 500 ms (diag-monitor.ps1), so its
+          # own death is dated within a second. Launched immediately
+          # after the eye so it can attach before the ~4 s death
+          # window closes.
           $monitorProc = Start-Process -FilePath $pwsh -ArgumentList @(
             "-NoProfile", "-File", "$env:GITHUB_WORKSPACE\.github\scripts\diag-monitor.ps1",
             "-EyePid", $eyePid, "-ControlPid", $controlPid, "-DiagDir", $env:DIAG_DIR
           ) -WindowStyle Hidden -PassThru -RedirectStandardOutput "$env:DIAG_DIR\monitor-stdout.log" -RedirectStandardError "$env:DIAG_DIR\monitor-stderr.log"
           $monitorPid = $monitorProc.Id
           $monitorPid | Out-File -FilePath "$env:DIAG_DIR\monitor-pid.txt" -Encoding utf8
-          @{ eye_pid = $eyePid; eye_launch_ts = $eyeLaunchTs.ToString("o"); control_pid = $controlPid; control_launch_ts = $controlLaunchTs.ToString("o"); control_sleep_secs = 45; monitor_pid = $monitorPid } | ConvertTo-Json | Out-File -FilePath "$env:DIAG_DIR\diag-control.json" -Encoding utf8
+          @{ eye_pid = $eyePid; eye_launch_ts = $eyeLaunchTs.ToString("o"); control_pid = $controlPid; control_launch_ts = $controlLaunchTs.ToString("o"); control_mode = "pulse-loop-500ms"; control_pulse_secs = 45; heartbeat_secs = 1; monitor_pid = $monitorPid } | ConvertTo-Json | Out-File -FilePath "$env:DIAG_DIR\diag-control.json" -Encoding utf8
           $deadline = (Get-Date).AddSeconds(30)
           $armed = $false
           while ((Get-Date) -lt $deadline) {
@@ -145,6 +188,11 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Continue"
+          . $env:GITHUB_WORKSPACE\.github\scripts\spike-log.ps1
+          # MEASUREMENT RUN 4: the step's own wall-clock start time —
+          # compared against the last pulses in D7, it answers whether
+          # a process died at the END of D1 or at the START of D2.
+          $stepStartTs = [DateTimeOffset]::UtcNow
           Start-Sleep -Seconds 15
           $logPath = "$env:EYE_DATA\eye-events.jsonl"
           $lines = 0; $lastTs = $null
@@ -159,6 +207,7 @@ jobs:
             $ts = (Get-Content $hb -Raw | ConvertFrom-Json).ts
             $hbAge = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($ts)).TotalSeconds
           }
+          $checkTs = [DateTimeOffset]::UtcNow
           $eyePid = [int](Get-Content "$env:DIAG_DIR\eye-pid.txt" -Raw).Trim()
           $alive = $null -ne (Get-Process -Id $eyePid -ErrorAction SilentlyContinue)
           $controlPid = [int](Get-Content "$env:DIAG_DIR\control-pid.txt" -Raw).Trim()
@@ -168,14 +217,18 @@ jobs:
             $monitorPid = [int](Get-Content "$env:DIAG_DIR\monitor-pid.txt" -Raw).Trim()
             $monitorAlive = $null -ne (Get-Process -Id $monitorPid -ErrorAction SilentlyContinue)
           }
-          @{ at = "15s"; log_lines = $lines; last_ts = $lastTs; heartbeat_age_secs = $hbAge; process_alive = $alive; control_alive = $controlAlive; monitor_alive = $monitorAlive } | ConvertTo-Json | Out-File -FilePath "$env:DIAG_DIR\diag-liveness-15s.json" -Encoding utf8
-          Write-Host "D2: 15s liveness — lines=$lines last_ts=$lastTs hb_age=$hbAge alive=$alive control_alive=$controlAlive monitor_alive=$monitorAlive"
+          $lastControlPulse = Get-LastPulse -Path "$env:DIAG_DIR\control-pulse.log"
+          $lastMonitorPulse = Get-LastPulse -Path "$env:DIAG_DIR\monitor-pulse.log"
+          @{ at = "15s"; step_start_ts = $stepStartTs.ToString("o"); check_ts = $checkTs.ToString("o"); log_lines = $lines; last_ts = $lastTs; heartbeat_age_secs = $hbAge; process_alive = $alive; control_alive = $controlAlive; monitor_alive = $monitorAlive; last_control_pulse_ts = $(if ($null -ne $lastControlPulse) { $lastControlPulse.ToString("o") } else { $null }); last_monitor_pulse_ts = $(if ($null -ne $lastMonitorPulse) { $lastMonitorPulse.ToString("o") } else { $null }) } | ConvertTo-Json | Out-File -FilePath "$env:DIAG_DIR\diag-liveness-15s.json" -Encoding utf8
+          Write-Host "D2: 15s liveness — lines=$lines last_ts=$lastTs hb_age=$hbAge alive=$alive control_alive=$controlAlive monitor_alive=$monitorAlive last_control_pulse=$lastControlPulse last_monitor_pulse=$lastMonitorPulse"
 
       - name: D3 probes at ~15 s (root + new subdir) + 10 s sense
         shell: pwsh
         run: |
           $ErrorActionPreference = "Continue"
           . $env:GITHUB_WORKSPACE\.github\scripts\spike-log.ps1
+          # MEASUREMENT RUN 4: wall-clock start (same question as D2).
+          $stepStartTs = [DateTimeOffset]::UtcNow
           # Probe A: directly in the watched root (the proven configuration:
           # the eye self-test creates files directly in watched dirs).
           $probeRoot = "$env:WATCH_PARENT\diag-probe-root-$env:DIAG_ID.exe"
@@ -203,13 +256,16 @@ jobs:
           }
           Remove-Item -Force $probeRoot -ErrorAction SilentlyContinue
           Remove-Item -Recurse -Force $probeDir -ErrorAction SilentlyContinue
-          @{ probe_root = $probeRoot; probe_root_seen = $seenRoot; probe_sub = $probeSub; probe_sub_seen = $seenSub; log_encrypted = $logEncrypted } | ConvertTo-Json | Out-File -FilePath "$env:DIAG_DIR\diag-probes.json" -Encoding utf8
+          @{ probe_root = $probeRoot; probe_root_seen = $seenRoot; probe_sub = $probeSub; probe_sub_seen = $seenSub; log_encrypted = $logEncrypted; step_start_ts = $stepStartTs.ToString("o") } | ConvertTo-Json | Out-File -FilePath "$env:DIAG_DIR\diag-probes.json" -Encoding utf8
           Write-Host "D3: root_seen=$seenRoot sub_seen=$seenSub log_encrypted=$logEncrypted"
 
       - name: D4 idle to 30 s + liveness snapshot
         shell: pwsh
         run: |
           $ErrorActionPreference = "Continue"
+          . $env:GITHUB_WORKSPACE\.github\scripts\spike-log.ps1
+          # MEASUREMENT RUN 4: wall-clock start + check time (as D2).
+          $stepStartTs = [DateTimeOffset]::UtcNow
           # Arm was ~15 s before D3 + 10 s sense: ~5 s more reaches 30 s.
           Start-Sleep -Seconds 5
           $logPath = "$env:EYE_DATA\eye-events.jsonl"
@@ -225,6 +281,7 @@ jobs:
             $ts = (Get-Content $hb -Raw | ConvertFrom-Json).ts
             $hbAge = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($ts)).TotalSeconds
           }
+          $checkTs = [DateTimeOffset]::UtcNow
           $eyePid = [int](Get-Content "$env:DIAG_DIR\eye-pid.txt" -Raw).Trim()
           $alive = $null -ne (Get-Process -Id $eyePid -ErrorAction SilentlyContinue)
           $controlPid = [int](Get-Content "$env:DIAG_DIR\control-pid.txt" -Raw).Trim()
@@ -234,30 +291,42 @@ jobs:
             $monitorPid = [int](Get-Content "$env:DIAG_DIR\monitor-pid.txt" -Raw).Trim()
             $monitorAlive = $null -ne (Get-Process -Id $monitorPid -ErrorAction SilentlyContinue)
           }
-          @{ at = "30s"; log_lines = $lines; last_ts = $lastTs; heartbeat_age_secs = $hbAge; process_alive = $alive; control_alive = $controlAlive; monitor_alive = $monitorAlive } | ConvertTo-Json | Out-File -FilePath "$env:DIAG_DIR\diag-liveness-30s.json" -Encoding utf8
-          Write-Host "D4: 30s liveness — lines=$lines last_ts=$lastTs hb_age=$hbAge alive=$alive control_alive=$controlAlive monitor_alive=$monitorAlive"
+          $lastControlPulse = Get-LastPulse -Path "$env:DIAG_DIR\control-pulse.log"
+          $lastMonitorPulse = Get-LastPulse -Path "$env:DIAG_DIR\monitor-pulse.log"
+          @{ at = "30s"; step_start_ts = $stepStartTs.ToString("o"); check_ts = $checkTs.ToString("o"); log_lines = $lines; last_ts = $lastTs; heartbeat_age_secs = $hbAge; process_alive = $alive; control_alive = $controlAlive; monitor_alive = $monitorAlive; last_control_pulse_ts = $(if ($null -ne $lastControlPulse) { $lastControlPulse.ToString("o") } else { $null }); last_monitor_pulse_ts = $(if ($null -ne $lastMonitorPulse) { $lastMonitorPulse.ToString("o") } else { $null }) } | ConvertTo-Json | Out-File -FilePath "$env:DIAG_DIR\diag-liveness-30s.json" -Encoding utf8
+          Write-Host "D4: 30s liveness — lines=$lines last_ts=$lastTs hb_age=$hbAge alive=$alive control_alive=$controlAlive monitor_alive=$monitorAlive last_control_pulse=$lastControlPulse last_monitor_pulse=$lastMonitorPulse"
 
       - name: D5 stop eye + stop-time observations
         shell: pwsh
         run: |
           $ErrorActionPreference = "Continue"
+          . $env:GITHUB_WORKSPACE\.github\scripts\spike-log.ps1
+          # MEASUREMENT RUN 4: wall-clock start + check time (as D2).
+          $stepStartTs = [DateTimeOffset]::UtcNow
           New-Item -ItemType File -Force -Path "$env:EYE_DATA\eye.stop" | Out-Null
           Start-Sleep -Seconds 5
+          $checkTs = [DateTimeOffset]::UtcNow
           $eyePid = [int](Get-Content "$env:DIAG_DIR\eye-pid.txt" -Raw).Trim()
           $alive = $null -ne (Get-Process -Id $eyePid -ErrorAction SilentlyContinue)
           $eyeKilledByStop = $alive
           if ($alive) { Stop-Process -Id $eyePid -Force -ErrorAction SilentlyContinue }
-          # The control is NEVER stopped by us: it sleeps 45 s and exits
-          # on its own. If it is dead here, it died early (C1 signal).
+          # The control is NEVER stopped by us: it runs a 45 s pulse
+          # loop and exits on its own. If it is dead here, it died
+          # early (C1 signal).
           $controlPid = [int](Get-Content "$env:DIAG_DIR\control-pid.txt" -Raw).Trim()
           $controlAliveAtStop = $null -ne (Get-Process -Id $controlPid -ErrorAction SilentlyContinue)
+          $monitorAliveAtStop = $false
+          if (Test-Path "$env:DIAG_DIR\monitor-pid.txt") {
+            $monitorPid = [int](Get-Content "$env:DIAG_DIR\monitor-pid.txt" -Raw).Trim()
+            $monitorAliveAtStop = $null -ne (Get-Process -Id $monitorPid -ErrorAction SilentlyContinue)
+          }
           $eyeExitFilePresent = Test-Path "$env:DIAG_DIR\eye-exit.json"
           $controlExitFilePresent = Test-Path "$env:DIAG_DIR\control-exit.json"
-          $hbAge = $null
+          $hbAge = $null; $hbTs = $null
           $hb = "$env:EYE_DATA\heartbeat.json"
           if (Test-Path $hb) {
-            $ts = (Get-Content $hb -Raw | ConvertFrom-Json).ts
-            $hbAge = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($ts)).TotalSeconds
+            $hbTs = (Get-Content $hb -Raw | ConvertFrom-Json).ts
+            $hbAge = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($hbTs)).TotalSeconds
           }
           $logPath = "$env:EYE_DATA\eye-events.jsonl"
           $lines = 0; $lastTs = $null; $hasAgentStop = $false
@@ -276,8 +345,10 @@ jobs:
           $exitTrace = ($stderrLines | Where-Object { $_ -match 'writer_loop exit' }) -join "`n"
           if ([string]::IsNullOrWhiteSpace($exitTrace)) { $exitTrace = $null }
           $stoppedFile = Test-Path "$env:EYE_DATA\eye.stopped"
-          @{ process_alive_at_stop = $alive; eye_killed_by_stop = $eyeKilledByStop; control_alive_at_stop = $controlAliveAtStop; eye_exit_file_present = $eyeExitFilePresent; control_exit_file_present = $controlExitFilePresent; heartbeat_age_at_stop_secs = $hbAge; log_lines = $lines; last_ts = $lastTs; has_agent_stop = $hasAgentStop; writer_exit_trace = $exitTrace; eye_stopped_file = $stoppedFile } | ConvertTo-Json | Out-File -FilePath "$env:DIAG_DIR\diag-stop.json" -Encoding utf8
-          Write-Host "D5: alive_at_stop=$alive killed_by_stop=$eyeKilledByStop control_alive_at_stop=$controlAliveAtStop eye_exit_file=$eyeExitFilePresent control_exit_file=$controlExitFilePresent hb_age=$hbAge lines=$lines agent_stop=$hasAgentStop exit_trace_present=$($null -ne $exitTrace)"
+          $lastControlPulse = Get-LastPulse -Path "$env:DIAG_DIR\control-pulse.log"
+          $lastMonitorPulse = Get-LastPulse -Path "$env:DIAG_DIR\monitor-pulse.log"
+          @{ step_start_ts = $stepStartTs.ToString("o"); check_ts = $checkTs.ToString("o"); process_alive_at_stop = $alive; eye_killed_by_stop = $eyeKilledByStop; control_alive_at_stop = $controlAliveAtStop; monitor_alive_at_stop = $monitorAliveAtStop; eye_exit_file_present = $eyeExitFilePresent; control_exit_file_present = $controlExitFilePresent; heartbeat_age_at_stop_secs = $hbAge; heartbeat_ts = $hbTs; log_lines = $lines; last_ts = $lastTs; has_agent_stop = $hasAgentStop; writer_exit_trace = $exitTrace; eye_stopped_file = $stoppedFile; last_control_pulse_ts = $(if ($null -ne $lastControlPulse) { $lastControlPulse.ToString("o") } else { $null }); last_monitor_pulse_ts = $(if ($null -ne $lastMonitorPulse) { $lastMonitorPulse.ToString("o") } else { $null }) } | ConvertTo-Json | Out-File -FilePath "$env:DIAG_DIR\diag-stop.json" -Encoding utf8
+          Write-Host "D5: alive_at_stop=$alive killed_by_stop=$eyeKilledByStop control_alive_at_stop=$controlAliveAtStop monitor_alive_at_stop=$monitorAliveAtStop eye_exit_file=$eyeExitFilePresent control_exit_file=$controlExitFilePresent hb_age=$hbAge lines=$lines agent_stop=$hasAgentStop exit_trace_present=$($null -ne $exitTrace) last_control_pulse=$lastControlPulse last_monitor_pulse=$lastMonitorPulse"
 
       - name: D6 Defender note (cheap observation, never fails the run)
         shell: pwsh
@@ -318,11 +389,13 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Continue"
+          . $env:GITHUB_WORKSPACE\.github\scripts\spike-log.ps1
           # The monitor writes the exit files ~45 s after launch (control
-          # sleep); D7 starts ~40 s after launch, so poll up to 60 s for
-          # both files before assembling the verdict. If the monitor died
-          # with the arming step, the files never appear and the poll
-          # simply expires — the D2/D4/D5 liveness reads are the backstop.
+          # pulse loop); D7 starts ~40 s after launch, so poll up to 60 s
+          # for both files before assembling the verdict. If the monitor
+          # died with the arming step, the files never appear and the
+          # poll simply expires — the D2/D4/D5 liveness reads are the
+          # backstop.
           $pollDeadline = (Get-Date).AddSeconds(60)
           while ((Get-Date) -lt $pollDeadline) {
             if ((Test-Path "$env:DIAG_DIR\eye-exit.json") -and (Test-Path "$env:DIAG_DIR\control-exit.json")) { break }
@@ -341,8 +414,9 @@ jobs:
           if (Test-Path "$env:DIAG_DIR\eye-exit.json") { $eyeExit = Get-Content "$env:DIAG_DIR\eye-exit.json" -Raw | ConvertFrom-Json }
           if (Test-Path "$env:DIAG_DIR\control-exit.json") { $controlExit = Get-Content "$env:DIAG_DIR\control-exit.json" -Raw | ConvertFrom-Json }
           if (Test-Path "$env:DIAG_DIR\monitor-started.json") { $monitorStarted = $true }
-          # Control lifetime: launch -> exit. The control sleeps 45 s, so
-          # a lifetime under 40 s means it died early (C1 signal).
+          # Control lifetime: launch -> exit. The control runs a 45 s
+          # pulse loop, so a lifetime under 40 s means it died early
+          # (C1 signal).
           $controlLifetimeSecs = $null; $controlDiedEarly = $false; $controlSurvived = $false
           if ($null -ne $controlExit -and $null -ne $controlExit.exit_ts) {
             $controlLifetimeSecs = ([DateTimeOffset]::Parse($controlExit.exit_ts) - [DateTimeOffset]::Parse($ctl.control_launch_ts)).TotalSeconds
@@ -360,16 +434,174 @@ jobs:
           if ($null -ne $eyeExit -and -not $stop.eye_killed_by_stop) { $eyeExitCode = $eyeExit.exit_code; $eyeExitTs = $eyeExit.exit_ts }
           $eventlogCount = 0
           if ($null -ne $evlog) { $eventlogCount = $evlog.count }
-          # Signature priority (council 14, C1/C2/C5): the control verdict
-          # comes first because it separates "launcher kills children"
-          # from "eye-specific death"; the writer traces follow; the
-          # strengthened no-trace signature needs a surviving control;
-          # the C2 fallback (no exit code AND no event-log entry) closes
-          # the list as inconclusive-by-design, never as a killer claim.
+          # --- MEASUREMENT (council 15, M1): bounded death times ---
+          # A death time is "bounded ≤ 1 s" when the window between the
+          # last proof of life and the death is at most one second.
+          # The window's low edge is the last alive write (pulse /
+          # heartbeat / log line); its high edge is the monitor's exact
+          # exit timestamp when captured, else last-alive + the write
+          # cadence (regularity argument: while alive the process wrote
+          # every cadence interval). The bound is FALSIFIED when the max
+          # inter-write gap exceeds cadence + 0.5 s, or when a later step
+          # saw the process alive more than cadence + 0.5 s after its
+          # last alive write. A falsified or missing bound means the run
+          # is inconclusive-by-design (M1) — never a killer claim.
+          function New-DeathBound {
+            param(
+              $LastAlive,        # [DateTimeOffset] or $null
+              $ExitTs,           # [DateTimeOffset] or $null (exact, from monitor)
+              [double]$CadenceSecs,
+              $MaxGapSecs,       # $null when fewer than 2 alive writes
+              [array]$AliveChecks # @{ check_ts; alive } per D-step
+            )
+            $b = @{ last_alive_ts = $null; death_high_ts = $null; window_secs = $null; bounded_1s = $false; regularity_ok = $false; note = $null }
+            if ($null -eq $LastAlive) { $b.note = "no alive evidence at all"; return $b }
+            $b.last_alive_ts = $LastAlive.ToString("o")
+            $regOk = $true
+            if ($null -ne $MaxGapSecs -and $MaxGapSecs -gt ($CadenceSecs + 0.5)) { $regOk = $false; $b.note = "max alive-write gap ${MaxGapSecs}s > $($CadenceSecs + 0.5)s: regularity broken" }
+            foreach ($chk in $AliveChecks) {
+              if ($chk.alive -and ($chk.check_ts - $LastAlive).TotalSeconds -gt ($CadenceSecs + 0.5)) {
+                $regOk = $false
+                $b.note = "observed alive at $($chk.check_ts.ToString('o')) but last alive write was $($LastAlive.ToString('o')): regularity broken"
+              }
+            }
+            if ($null -ne $ExitTs) {
+              if (($ExitTs - $LastAlive).TotalSeconds -lt 0) { $regOk = $false; $b.note = "exit time precedes last alive write: inconsistent" }
+              foreach ($chk in $AliveChecks) {
+                if ($chk.alive -and $chk.check_ts -gt $ExitTs) { $regOk = $false; $b.note = "observed alive at $($chk.check_ts.ToString('o')) after recorded exit $($ExitTs.ToString('o')): inconsistent" }
+              }
+              $b.death_high_ts = $ExitTs.ToString("o")
+              $b.window_secs = [Math]::Round(($ExitTs - $LastAlive).TotalSeconds, 3)
+              if ($null -eq $b.note) { $b.note = "exact exit time from monitor" }
+            } else {
+              $b.death_high_ts = $LastAlive.AddSeconds($CadenceSecs).ToString("o")
+              $b.window_secs = $CadenceSecs
+              if ($regOk -and $null -eq $b.note) { $b.note = "regularity: last alive write + ${CadenceSecs}s cadence" }
+            }
+            $b.regularity_ok = $regOk
+            $b.bounded_1s = ($null -ne $b.window_secs -and $b.window_secs -ge 0 -and $b.window_secs -le 1.0 -and $b.regularity_ok)
+            return $b
+          }
+          function Compare-DeathWindow {
+            param($Bound, [DateTimeOffset]$Ref)
+            # "after": alive after the reference instant (died after it).
+            # "before": the death window ends at or before it (died
+            # before it). "straddles": the window contains the reference
+            # instant. "unknown": no alive evidence at all.
+            if ($null -eq $Bound.last_alive_ts) { return "unknown" }
+            $low = [DateTimeOffset]::Parse($Bound.last_alive_ts)
+            $high = [DateTimeOffset]::Parse($Bound.death_high_ts)
+            if ($low -gt $Ref) { return "after" }
+            if ($high -le $Ref) { return "before" }
+            return "straddles"
+          }
+          $armEndTs = [DateTimeOffset]::Parse($arm.arm_step_end_ts)
+          $d2StartTs = [DateTimeOffset]::Parse($l15.step_start_ts)
+          $controlStats = Get-PulseStats -Path "$env:DIAG_DIR\control-pulse.log"
+          $monitorStats = Get-PulseStats -Path "$env:DIAG_DIR\monitor-pulse.log"
+          $controlLastPulse = $null
+          if ($null -ne $controlStats.last_ts) { $controlLastPulse = [DateTimeOffset]::Parse($controlStats.last_ts) }
+          $monitorLastPulse = $null
+          if ($null -ne $monitorStats.last_ts) { $monitorLastPulse = [DateTimeOffset]::Parse($monitorStats.last_ts) }
+          $controlExitTs = $null
+          if ($null -ne $controlExit -and $null -ne $controlExit.exit_ts) { $controlExitTs = [DateTimeOffset]::Parse($controlExit.exit_ts) }
+          # Eye last-alive evidence, re-read at D7 (freshest): heartbeat
+          # ts + last log line ts. The heartbeat is the eye's cadenced
+          # write (1 s); the log is event-driven, so its gap is reported
+          # as information only and NEVER breaks the eye's regularity —
+          # a quiet tree can gap the log while the eye lives.
+          $eyeHbTs = $null
+          $hbFile = "$env:EYE_DATA\heartbeat.json"
+          if (Test-Path $hbFile) {
+            try { $eyeHbTs = [DateTimeOffset]::Parse((Get-Content $hbFile -Raw | ConvertFrom-Json).ts) } catch {}
+          }
+          if ($null -eq $eyeHbTs -and $null -ne $stop.heartbeat_ts) { $eyeHbTs = [DateTimeOffset]::Parse($stop.heartbeat_ts) }
+          $eyeLogLastTs = $null; $eyeLogGapMax = $null
+          $eyeLogPath = "$env:EYE_DATA\eye-events.jsonl"
+          if (Test-Path $eyeLogPath) {
+            $eyeEvents = Read-EyeLog -Path $eyeLogPath
+            $eyeTsList = @()
+            foreach ($e in $eyeEvents) {
+              try { $eyeTsList += [DateTimeOffset]::Parse($e.ts) } catch {}
+            }
+            if ($eyeTsList.Count -gt 0) { $eyeLogLastTs = $eyeTsList[-1] }
+            $maxGap = 0
+            for ($i = 1; $i -lt $eyeTsList.Count; $i++) {
+              $g = ($eyeTsList[$i] - $eyeTsList[$i-1]).TotalSeconds
+              if ($g -gt $maxGap) { $maxGap = $g }
+            }
+            if ($eyeTsList.Count -gt 1) { $eyeLogGapMax = [Math]::Round($maxGap, 3) }
+          }
+          $eyeLastAlive = $null
+          if ($null -ne $eyeHbTs -and $null -ne $eyeLogLastTs) { $eyeLastAlive = if ($eyeHbTs -gt $eyeLogLastTs) { $eyeHbTs } else { $eyeLogLastTs } }
+          elseif ($null -ne $eyeHbTs) { $eyeLastAlive = $eyeHbTs }
+          elseif ($null -ne $eyeLogLastTs) { $eyeLastAlive = $eyeLogLastTs }
+          $eyeExitTsBound = $null
+          if ($null -ne $eyeExit -and $null -ne $eyeExit.exit_ts -and -not $stop.eye_killed_by_stop) { $eyeExitTsBound = [DateTimeOffset]::Parse($eyeExit.exit_ts) }
+          $eyeChecks = @(
+            @{ check_ts = [DateTimeOffset]::Parse($l15.check_ts); alive = $l15.process_alive },
+            @{ check_ts = [DateTimeOffset]::Parse($l30.check_ts); alive = $l30.process_alive },
+            @{ check_ts = [DateTimeOffset]::Parse($stop.check_ts); alive = $stop.process_alive_at_stop }
+          )
+          $controlChecks = @(
+            @{ check_ts = [DateTimeOffset]::Parse($l15.check_ts); alive = $l15.control_alive },
+            @{ check_ts = [DateTimeOffset]::Parse($l30.check_ts); alive = $l30.control_alive },
+            @{ check_ts = [DateTimeOffset]::Parse($stop.check_ts); alive = $stop.control_alive_at_stop }
+          )
+          $monitorChecks = @(
+            @{ check_ts = [DateTimeOffset]::Parse($l15.check_ts); alive = $l15.monitor_alive },
+            @{ check_ts = [DateTimeOffset]::Parse($l30.check_ts); alive = $l30.monitor_alive },
+            @{ check_ts = [DateTimeOffset]::Parse($stop.check_ts); alive = $stop.monitor_alive_at_stop }
+          )
+          $controlBound = New-DeathBound -LastAlive $controlLastPulse -ExitTs $controlExitTs -CadenceSecs 0.5 -MaxGapSecs $controlStats.max_gap_secs -AliveChecks $controlChecks
+          $monitorBound = New-DeathBound -LastAlive $monitorLastPulse -ExitTs $null -CadenceSecs 0.5 -MaxGapSecs $monitorStats.max_gap_secs -AliveChecks $monitorChecks
+          # Eye: heartbeat cadence 1 s; the log gap is info-only (see
+          # above), so MaxGapSecs is $null here by design. Extra eye
+          # regularity checks against the D-step heartbeat ages: a step
+          # that saw the eye alive must have seen a fresh heartbeat
+          # (age ≤ 1.5 s), and no step's implied last heartbeat may sit
+          # more than 1.5 s after the last alive write we recorded.
+          $eyeBound = New-DeathBound -LastAlive $eyeLastAlive -ExitTs $eyeExitTsBound -CadenceSecs 1.0 -MaxGapSecs $null -AliveChecks $eyeChecks
+          $eyeRegNote = $eyeBound.note
+          if ($eyeBound.regularity_ok) {
+            foreach ($step in @(@{ check = $l15; hb_age = $l15.heartbeat_age_secs }, @{ check = $l30; hb_age = $l30.heartbeat_age_secs }, @{ check = $stop; hb_age = $stop.heartbeat_age_at_stop_secs })) {
+              $stepCheckTs = [DateTimeOffset]::Parse($step.check.check_ts)
+              if ($step.check.process_alive -or $step.check.process_alive_at_stop) {
+                if ($null -ne $step.hb_age -and $step.hb_age -gt 1.5) { $eyeBound.regularity_ok = $false; $eyeRegNote = "eye observed alive but heartbeat age $($step.hb_age)s > 1.5s: heartbeat stalled while alive" }
+              }
+              if ($null -ne $step.hb_age) {
+                $impliedHb = $stepCheckTs.AddSeconds(-$step.hb_age)
+                if (($impliedHb - $eyeLastAlive).TotalSeconds -gt 1.5) { $eyeBound.regularity_ok = $false; $eyeRegNote = "implied last heartbeat $impliedHb is later than recorded last alive $($eyeLastAlive.ToString('o')): heartbeat continued after our record" }
+              }
+            }
+            if (-not $eyeBound.regularity_ok) { $eyeBound.note = $eyeRegNote; $eyeBound.bounded_1s = $false }
+          }
+          $controlBound.death_vs_d1_end = Compare-DeathWindow -Bound $controlBound -Ref $armEndTs
+          $controlBound.death_vs_d2_start = Compare-DeathWindow -Bound $controlBound -Ref $d2StartTs
+          $monitorBound.death_vs_d1_end = Compare-DeathWindow -Bound $monitorBound -Ref $armEndTs
+          $monitorBound.death_vs_d2_start = Compare-DeathWindow -Bound $monitorBound -Ref $d2StartTs
+          $eyeBound.death_vs_d1_end = Compare-DeathWindow -Bound $eyeBound -Ref $armEndTs
+          $eyeBound.death_vs_d2_start = Compare-DeathWindow -Bound $eyeBound -Ref $d2StartTs
+          $measurementOk = $controlBound.bounded_1s -and $monitorBound.bounded_1s -and $eyeBound.bounded_1s
+          $deathBounds = @{
+            control = $controlBound + @{ pulse_count = $controlStats.count; pulse_max_gap_secs = $controlStats.max_gap_secs; exit_code = $(if ($null -ne $controlExit) { $controlExit.exit_code } else { $null }); exit_ts = $(if ($null -ne $controlExit) { $controlExit.exit_ts } else { $null }) }
+            monitor = $monitorBound + @{ pulse_count = $monitorStats.count; pulse_max_gap_secs = $monitorStats.max_gap_secs }
+            eye = $eyeBound + @{ heartbeat_ts = $(if ($null -ne $eyeHbTs) { $eyeHbTs.ToString("o") } else { $null }); last_log_ts = $(if ($null -ne $eyeLogLastTs) { $eyeLogLastTs.ToString("o") } else { $null }); log_max_gap_secs = $eyeLogGapMax; exit_code = $eyeExitCode; exit_ts = $eyeExitTs }
+          }
+          # Signature priority (council 15, M1/M2): the measurement gate
+          # comes FIRST after the two moot cases — a run without bounded
+          # death times for all three processes is inconclusive-by-design
+          # (M1), never evidence for any killer, and the matter goes to
+          # council 16. Only a MEASURED control death names the measured
+          # signature; the writer traces follow; the strengthened
+          # no-trace signature needs a surviving control; the C2 fallback
+          # (no exit code AND no event-log entry) closes the list as
+          # inconclusive-by-design, never as a killer claim.
           $signature = "inconclusive"; $reasons = @()
           if (-not $arm.armed) { $signature = "diagnosed-never-armed"; $reasons += "eye never armed: no fresh heartbeat in 30 s (R9)" }
           elseif ($pr.log_encrypted) { $signature = "diagnosed-log-encrypted"; $reasons += "log lines carry no type field (DPAPI wrappers): plaintext opt-in regressed" }
-          elseif ($controlDiedEarly) { $signature = "diagnosed-control-dead-early"; $reasons += "control (same launch, 45 s sleep) died before its sleep ended (lifetime $($controlLifetimeDisplay) s; alive at 15 s: $($l15.control_alive); alive at 30 s: $($l30.control_alive)): the killer is in the launch/step environment, not in the eye"; if (-not $monitorStarted -or ($null -eq $eyeExit -and $null -eq $controlExit)) { $reasons += "monitor produced no exit files (monitor itself a D1 child): consistent with the arming step killing its children when it ends" } }
+          elseif (-not $measurementOk) { $signature = "inconclusive-by-design"; $unbounded = @(); if (-not $controlBound.bounded_1s) { $unbounded += "control (last alive: $($controlBound.last_alive_ts); $($controlBound.note))" }; if (-not $monitorBound.bounded_1s) { $unbounded += "monitor (last alive: $($monitorBound.last_alive_ts); $($monitorBound.note))" }; if (-not $eyeBound.bounded_1s) { $unbounded += "eye (last alive: $($eyeBound.last_alive_ts); $($eyeBound.note))" }; $reasons += "M1: death times NOT bounded within 1 s — unbounded: $($unbounded -join '; ') — inconclusive BY DESIGN, not evidence for any killer; council 16 decides with the same question" }
+          elseif ($controlDiedEarly) { $signature = "diagnosed-control-dead-early-measured"; $reasons += "control (same launch, 45 s pulse loop) died before its loop ended (lifetime $($controlLifetimeDisplay) s; alive at 15 s: $($l15.control_alive); alive at 30 s: $($l30.control_alive)): the killer is in the launch/step environment, not in the eye"; $reasons += "measured death windows (≤1 s each): control last alive $($controlBound.last_alive_ts) → $($controlBound.death_high_ts) (vs D1 end: $($controlBound.death_vs_d1_end); vs D2 start: $($controlBound.death_vs_d2_start)); monitor last alive $($monitorBound.last_alive_ts) → $($monitorBound.death_high_ts) (vs D1 end: $($monitorBound.death_vs_d1_end); vs D2 start: $($monitorBound.death_vs_d2_start)); eye last alive $($eyeBound.last_alive_ts) → $($eyeBound.death_high_ts) (vs D1 end: $($eyeBound.death_vs_d1_end); vs D2 start: $($eyeBound.death_vs_d2_start))"; if (-not $monitorStarted -or ($null -eq $eyeExit -and $null -eq $controlExit)) { $reasons += "monitor produced no exit files (monitor itself a D1 child): consistent with the arming step killing its children when it ends" } }
           elseif ($null -ne $stop.writer_exit_trace -and $stop.writer_exit_trace -match 'write error') { $signature = "diagnosed-write-error"; $reasons += "writer_loop exited with a write error (exact stderr line in writer_exit_trace)" }
           elseif ($null -ne $stop.writer_exit_trace -and $stop.writer_exit_trace -match 'channel closed') { $signature = "diagnosed-channel-closed"; $reasons += "writer_loop exited because the channel closed (all producers dropped)" }
           elseif (-not $stop.process_alive_at_stop -and $null -eq $stop.writer_exit_trace -and $controlSurvived) { $signature = "diagnosed-process-dead-no-trace"; $reasons += "process dead at stop time with NO writer exit trace; control survived the identical launch (lifetime $($controlLifetimeDisplay) s), so the killer is eye-specific, not the launcher"; if ($null -ne $eyeExitCode) { $reasons += "eye exit code captured by the monitor: $eyeExitCode (exit at $eyeExitTs)" } else { $reasons += "eye exit code NOT captured (monitor file missing or eye died before the monitor attached): code unknown, signature stands on control survival + no trace" } }
@@ -382,9 +614,11 @@ jobs:
           $verdict = $signature
           $results = @{
             run_id = $env:GITHUB_RUN_ID; diag_id = $env:DIAG_ID; verdict = $verdict; signature = $signature; reasons = $reasons
+            run = 4; council = 15; measurement_ok = $measurementOk; death_bounds = $deathBounds
+            m5_note = "any future success of (a) must be tagged: does not prove eye survival outside a live step nor device performance"
             armed = $arm.armed; arm_ts = $arm.arm_ts; arm_step_end_ts = $arm.arm_step_end_ts; eye_pid = $arm.pid
             liveness_15s = $l15; probes = $pr; liveness_30s = $l30; stop = $stop; defender = $def
-            control = @{ pid = $ctl.control_pid; launch_ts = $ctl.control_launch_ts; sleep_secs = $ctl.control_sleep_secs; exit_code = $(if ($null -ne $controlExit) { $controlExit.exit_code } else { $null }); exit_ts = $(if ($null -ne $controlExit) { $controlExit.exit_ts } else { $null }); lifetime_secs = $controlLifetimeSecs; died_early = $controlDiedEarly; survived = $controlSurvived }
+            control = @{ pid = $ctl.control_pid; launch_ts = $ctl.control_launch_ts; mode = $ctl.control_mode; pulse_secs = $ctl.control_pulse_secs; heartbeat_secs = $ctl.heartbeat_secs; exit_code = $(if ($null -ne $controlExit) { $controlExit.exit_code } else { $null }); exit_ts = $(if ($null -ne $controlExit) { $controlExit.exit_ts } else { $null }); lifetime_secs = $controlLifetimeSecs; died_early = $controlDiedEarly; survived = $controlSurvived }
             eye_exit = @{ exit_code = $eyeExitCode; exit_ts = $eyeExitTs; natural = (-not $stop.eye_killed_by_stop); monitor_file_present = ($null -ne $eyeExit) }
             monitor = @{ started = $monitorStarted; pid = $ctl.monitor_pid }
             eventlog = $evlog
@@ -417,6 +651,8 @@ jobs:
             ${{ env.DIAG_DIR }}\control-stderr.log
             ${{ env.DIAG_DIR }}\monitor-stdout.log
             ${{ env.DIAG_DIR }}\monitor-stderr.log
+            ${{ env.DIAG_DIR }}\control-pulse.log
+            ${{ env.DIAG_DIR }}\monitor-pulse.log
             ${{ env.DIAG_DIR }}\diag-*.json
             ${{ env.DIAG_DIR }}\eye-exit.json
             ${{ env.DIAG_DIR }}\control-exit.json
@@ -426,5 +662,5 @@ jobs:
       - name: D9 diagnostic verdict gate
         shell: pwsh
         run: |
-          if ($env:EYE_DIAG_VERDICT -notlike "diagnosed-*") { throw "eye diagnostic: $($env:EYE_DIAG_VERDICT) — no signature named; per council 14 condition C5 this was the last diagnostic in this question: council 15 decides, no 4th diagnostic and no slice run 3 without it" }
-          Write-Host "eye diagnostic: $($env:EYE_DIAG_VERDICT)"
+          if ($env:EYE_DIAG_VERDICT -notlike "diagnosed-*") { throw "eye diagnostic measurement run 4: $($env:EYE_DIAG_VERDICT) — no bounded measurement; per council 15 condition M1 the matter goes to council 16, no 5th diagnostic and no slice run 3 without it" }
+          Write-Host "eye diagnostic measurement run 4: $($env:EYE_DIAG_VERDICT)"
