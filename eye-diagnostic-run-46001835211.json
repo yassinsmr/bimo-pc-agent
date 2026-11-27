@@ -1,0 +1,46 @@
+{
+  "eye_pid": 4176,
+  "stop": {
+    "heartbeat_age_at_stop_secs": 38.7810114,
+    "process_alive_at_stop": false,
+    "log_lines": 161,
+    "eye_stopped_file": false,
+    "has_agent_stop": false,
+    "writer_exit_trace": null,
+    "last_ts": "2026-11-27T12:50:23Z"
+  },
+  "run_id": "46001835211",
+  "liveness_15s": {
+    "at": "15s",
+    "process_alive": false,
+    "log_lines": 161,
+    "last_ts": "2026-11-27T12:50:23Z",
+    "heartbeat_age_secs": 17.3984588
+  },
+  "armed": true,
+  "signature": "diagnosed-process-dead-no-trace",
+  "diag_id": "diag-46001835211",
+  "defender": {
+    "defender_realtime_protection": false
+  },
+  "arm_ts": "2026-11-27T12:50:19.9748217+00:00",
+  "reasons": [
+    "process dead at stop time with NO writer exit trace: killed externally before the writer could exit"
+  ],
+  "probes": {
+    "probe_sub_seen": false,
+    "probe_root": "C:\\bimo-slice\\diag-probe-root-diag-46001835211.exe",
+    "log_encrypted": false,
+    "probe_sub": "C:\\bimo-slice\\diag-probe-sub-diag-46001835211\\probe.exe",
+    "probe_root_seen": false
+  },
+  "runner_note": "does not prove device performance",
+  "liveness_30s": {
+    "log_lines": 161,
+    "process_alive": false,
+    "last_ts": "2026-11-27T12:50:23Z",
+    "at": "30s",
+    "heartbeat_age_secs": 33.4018362
+  },
+  "verdict": "diagnosed-process-dead-no-trace"
+}
