@@ -60,12 +60,13 @@
 
 name: windows-hand-thin-slice
 
+# workflow_dispatch ONLY (cycle 55): the spike is capped at 4 runs by
+# council ruling — no run 5. The `push` trigger was removed so that a
+# later push touching crates/bimo-eye/** (e.g. the crypto fix) can
+# never re-trigger this workflow by accident. Do NOT re-add it, and
+# do NOT dispatch this workflow again.
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - "crates/bimo-eye/**"
-      - ".github/workflows/windows-hand-thin-slice.yml"
 
 permissions:
   contents: write

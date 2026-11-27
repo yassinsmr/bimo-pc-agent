@@ -303,10 +303,12 @@ fn main() { eprintln!("[trace] main start");
     // failure. Plaintext in this throwaway test dir is an explicit
     // opt-in, restored before the eye starts.
     //
-    // NOTE (cycle 15 fix): the opt-in assertion must be checked WHILE
-    // the failure is still simulated. On Windows with a working DPAPI,
-    // detect_mode() returns Dpapi once the seam is removed — asserting
-    // Plain after removing it is wrong and failed the Windows run.
+    // NOTE (cycle 15 fix, amended cycle 55): the opt-in assertion must
+    // be checked WHILE the failure is still simulated. Since cycle 55
+    // the opt-in wins over DPAPI availability, so on Windows with a
+    // working DPAPI detect_mode() returns Plain when opted in — the
+    // old note ("returns Dpapi once the seam is removed") described
+    // the pre-55 order and is no longer true.
     std::env::remove_var("BIMO_EYE_FORCE_CRYPTO_FAIL");
     std::env::set_var("BIMO_EYE_PLAINTEXT_OK", "1");
     let fail_closed_ok = {

@@ -161,6 +161,13 @@ jobs:
           $seen = $false
           while ((Get-Date) -lt $deadline) {
             $events = Read-EyeLog -Path $logPath
+            # Cycle-55 diagnosis (slice run 1): every log line was a
+            # DPAPI wrapper ({"data","enc"}, no "type") — the opt-in
+            # never took effect. Fail LOUDLY on that signature at once
+            # instead of burning the 10 s and reporting a bare miss.
+            if ($events.Count -gt 0 -and (@($events | Where-Object { $null -ne $_.type }).Count -eq 0)) {
+              throw "S0c fail: log-encrypted — eye-events.jsonl has $($events.Count) lines but none carries a type field (DPAPI wrappers: BIMO_EYE_PLAINTEXT_OK did not take effect)"
+            }
             $hit = @($events | Where-Object { $_.path -eq $probeFile -and $_.type -in @("file.completed", "install.detected") })
             if ($hit.Count -ge 1) { $seen = $true; break }
             Start-Sleep -Milliseconds 500
@@ -257,6 +264,10 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Continue"
+          # Marker so S8 can tell "phase 1 never ran" from
+          # "phase 1 ran but wrote no hand-slice.json"
+          # (probe-timeout-unsettled signature).
+          New-Item -ItemType File -Force -Path "$env:SLICE_DIR\phase1-started" | Out-Null
           $exe = "$env:GITHUB_WORKSPACE\target\x86_64-pc-windows-msvc\release\bimo-hand-self-test.exe"
           & $exe --slice --slice-inputs "$env:SLICE_DIR\slice-inputs.json" --data-dir $env:HAND_DATA --out "$env:SLICE_DIR\hand-slice.json" --slice-phase install
           $code = $LASTEXITCODE
@@ -426,7 +437,12 @@ jobs:
           $s7 = Read-JsonOrNull "$env:SLICE_DIR\s7.json"
           $verdict = "pass"
           $reasons = @()
-          if ($null -eq $hs) { $verdict = "fail"; $reasons += "hand-slice-missing (probe-timeout-unsettled signature: no hand-slice.json)" }
+          $phase1Started = Test-Path "$env:SLICE_DIR\phase1-started"
+          if ($null -eq $hs) {
+            if ($phase1Started) { $reasons += "hand-slice-missing (probe-timeout-unsettled signature: no hand-slice.json)" }
+            else { $reasons += "hand-slice-missing (phase 1 never ran — failure before the install phase)" }
+            $verdict = "fail"
+          }
           elseif ($hs.slice_exit_code -ne 0 -and $null -eq $hs.steps.s7) { $verdict = "fail"; $reasons += "install-phase-failed: $($hs.slice_failure)" }
           if ($null -ne $s6 -and $s6.status -eq "unreadable") { $verdict = "fail"; $reasons += "fail-s6-unreadable" }
           elseif ($null -ne $s6 -and $s6.status -ne "pass") { $verdict = "fail"; $reasons += "s6-failed: $($s6.reason)" }
@@ -442,7 +458,7 @@ jobs:
             reasons = $reasons
             hand_slice = $hs
             slice_inputs = $inputs
-            s1_note = "four checks passed in the S1 step (hash, GPG, Authenticode, winget)"
+            s1_note = if ($null -ne $inputs) { "four checks passed in the S1 step (hash, GPG, Authenticode, winget)" } else { "S1 did not complete (slice-inputs.json missing)" }
             eye_witness = $wit
             shot_check = $shot
             slice_window = $win

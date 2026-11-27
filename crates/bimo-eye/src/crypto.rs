@@ -11,9 +11,22 @@
 //! explicitly opts into plaintext with the environment variable
 //! `BIMO_EYE_PLAINTEXT_OK=1` — and that opt-in is itself recorded as
 //! a warning event in the log, so plaintext is never silent either.
-//! A mid-run DPAPI failure makes `protect_line` return an error and
-//! the writer stops (the log is the product; a half-written log that
-//! silently went plain is worse than a stopped eye).
+//!
+//! PRIORITY (cycle 55, council 12): the opt-in is checked FIRST, so
+//! an explicit `BIMO_EYE_PLAINTEXT_OK=1` means plaintext EVEN where
+//! DPAPI works. The old story — "opt-in only when DPAPI fails" —
+//! is over: it made the opt-in useless on every machine with working
+//! DPAPI (slice run 1: the eye was launched opted-in and the log
+//! still came out encrypted). The guarantee narrows from a hard floor
+//! (DPAPI always, no exception) to a procedural one (plaintext only
+//! by an explicit, recorded opt-in) — that narrowing is documented
+//! here deliberately, and the variable must only ever be set inside
+//! a step (process scope) of a throwaway-runner workflow, never
+//! machine/job-wide and never on the Legion path (permanent rule,
+//! council 12). A mid-run DPAPI failure makes `protect_line` return
+//! an error and the writer stops (the log is the product; a
+//! half-written log that silently went plain is worse than a
+//! stopped eye).
 //!
 //! Test seam: `BIMO_EYE_FORCE_CRYPTO_FAIL=1` simulates a DPAPI
 //! failure on any platform (the same branches a real failure takes).
@@ -60,43 +73,41 @@ fn crypto_force_fail() -> bool {
 /// `Plain` ONLY with an explicit opt-in, otherwise `Err` with a clear
 /// message naming the refusal.
 pub fn detect_mode() -> Result<CryptoMode, String> {
+    // Explicit operator opt-in wins over DPAPI availability (cycle 55:
+    // slice run 1 proved the old order wrong — the eye was launched
+    // with BIMO_EYE_PLAINTEXT_OK=1 on a runner where DPAPI works, and
+    // the log still came out DPAPI-encrypted, so no witness check
+    // could read it). The opt-in is explicit and is itself recorded
+    // as a warning event in the log, so plaintext is never silent.
+    // Without the opt-in the old behavior is unchanged: DPAPI if it
+    // works, refuse otherwise. Fail-closed is preserved.
+    if plaintext_opt_in() {
+        return Ok(CryptoMode::Plain);
+    }
     if crypto_force_fail() {
-        return if plaintext_opt_in() {
-            Ok(CryptoMode::Plain)
-        } else {
-            Err("DPAPI unavailable (simulated failure): refusing to write \
+        return Err("DPAPI unavailable (simulated failure): refusing to write \
                  sensitive log lines in plaintext; set BIMO_EYE_PLAINTEXT_OK=1 \
                  to opt in explicitly"
-                .to_string())
-        };
+            .to_string());
     }
     #[cfg(windows)]
     {
         match dpapi_protect(b"bimo-eye-probe") {
             Some(_) => Ok(CryptoMode::Dpapi),
-            None => {
-                if plaintext_opt_in() {
-                    Ok(CryptoMode::Plain)
-                } else {
-                    Err("DPAPI unavailable on this machine: refusing to write \
+            None => Err("DPAPI unavailable on this machine: refusing to write \
                          sensitive log lines in plaintext; set \
                          BIMO_EYE_PLAINTEXT_OK=1 to opt in explicitly"
-                        .to_string())
-                }
-            }
+                .to_string()),
         }
     }
     #[cfg(not(windows))]
     {
-        // No DPAPI off Windows: same rule — plaintext only by opt-in.
-        if plaintext_opt_in() {
-            Ok(CryptoMode::Plain)
-        } else {
-            Err("DPAPI does not exist on this platform: refusing to write \
-                 sensitive log lines in plaintext; set BIMO_EYE_PLAINTEXT_OK=1 \
-                 to opt in explicitly"
-                .to_string())
-        }
+        // No DPAPI off Windows: same rule — plaintext only by opt-in
+        // (already returned Plain above), otherwise refuse.
+        Err("DPAPI does not exist on this platform: refusing to write \
+             sensitive log lines in plaintext; set BIMO_EYE_PLAINTEXT_OK=1 \
+             to opt in explicitly"
+            .to_string())
     }
 }
 
