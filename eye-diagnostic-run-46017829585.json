@@ -1,0 +1,149 @@
+{
+  "eventlog": {
+    "note": null,
+    "entries": [],
+    "count": 0,
+    "window_start": "2026-11-27T14:40:20.0471936+00:00",
+    "queried": true,
+    "window_end": "2026-11-27T14:41:15.4091343+00:00"
+  },
+  "reasons": [
+    "control (same launch, 45 s pulse loop) died before its loop ended (lifetime unknown s; alive at 15 s: False; alive at 30 s: False): the killer is in the launch/step environment, not in the eye",
+    "measured death windows (≤1 s each): control last alive 2026-11-27T14:40:29.9527281+00:00 → 2026-11-27T14:40:30.4527281+00:00 (vs D1 end: after; vs D2 start: straddles); monitor last alive 2026-11-27T14:40:29.9577038+00:00 → 2026-11-27T14:40:30.4577038+00:00 (vs D1 end: after; vs D2 start: straddles); eye last alive 2026-11-27T14:40:30.0000000+00:00 → 2026-11-27T14:40:31.0000000+00:00 (vs D1 end: after; vs D2 start: straddles)",
+    "monitor produced no exit files (monitor itself a D1 child): consistent with the arming step killing its children when it ends"
+  ],
+  "measurement_ok": true,
+  "defender": {
+    "defender_realtime_protection": false
+  },
+  "armed": true,
+  "control": {
+    "exit_ts": null,
+    "lifetime_secs": null,
+    "launch_ts": "2026-11-27T14:40:24.9748952+00:00",
+    "exit_code": null,
+    "mode": "pulse-loop-500ms",
+    "pid": 8344,
+    "died_early": true,
+    "heartbeat_secs": 1,
+    "survived": false,
+    "pulse_secs": 45
+  },
+  "eye_exit": {
+    "exit_ts": null,
+    "monitor_file_present": false,
+    "natural": true,
+    "exit_code": null
+  },
+  "verdict": "diagnosed-control-dead-early-measured",
+  "arm_ts": "2026-11-27T14:40:25.0471936+00:00",
+  "liveness_30s": {
+    "step_start_ts": "2026-11-27T14:40:56.6408035+00:00",
+    "control_alive": false,
+    "check_ts": "2026-11-27T14:41:01.7420587+00:00",
+    "process_alive": false,
+    "last_control_pulse_ts": "2026-11-27T14:40:29.9527281+00:00",
+    "last_ts": "2026-11-27T14:40:30Z",
+    "last_monitor_pulse_ts": "2026-11-27T14:40:29.9577038+00:00",
+    "log_lines": 162,
+    "monitor_alive": false,
+    "heartbeat_age_secs": 31.7345029,
+    "at": "30s"
+  },
+  "probes": {
+    "log_encrypted": false,
+    "probe_root": "C:\\bimo-slice\\diag-probe-root-diag-46017829585.exe",
+    "step_start_ts": "2026-11-27T14:40:45.8401195+00:00",
+    "probe_sub_seen": false,
+    "probe_root_seen": false,
+    "probe_sub": "C:\\bimo-slice\\diag-probe-sub-diag-46017829585\\probe.exe"
+  },
+  "monitor": {
+    "pid": 8308,
+    "started": true
+  },
+  "run_id": "46017829585",
+  "eye_pid": 7696,
+  "stop": {
+    "log_lines": 162,
+    "last_monitor_pulse_ts": "2026-11-27T14:40:29.9577038+00:00",
+    "monitor_alive_at_stop": false,
+    "last_ts": "2026-11-27T14:40:30Z",
+    "control_exit_file_present": false,
+    "writer_exit_trace": null,
+    "heartbeat_ts": "2026-11-27T14:40:30Z",
+    "process_alive_at_stop": false,
+    "eye_exit_file_present": false,
+    "check_ts": "2026-11-27T14:41:07.1783205+00:00",
+    "heartbeat_age_at_stop_secs": 37.1995547,
+    "has_agent_stop": false,
+    "last_control_pulse_ts": "2026-11-27T14:40:29.9527281+00:00",
+    "control_alive_at_stop": false,
+    "step_start_ts": "2026-11-27T14:41:02.1093518+00:00",
+    "eye_killed_by_stop": false,
+    "eye_stopped_file": false
+  },
+  "diag_id": "diag-46017829585",
+  "signature": "diagnosed-control-dead-early-measured",
+  "liveness_15s": {
+    "check_ts": "2026-11-27T14:40:45.500748+00:00",
+    "at": "15s",
+    "heartbeat_age_secs": 15.4938542,
+    "control_alive": false,
+    "monitor_alive": false,
+    "last_control_pulse_ts": "2026-11-27T14:40:29.9527281+00:00",
+    "last_ts": "2026-11-27T14:40:30Z",
+    "log_lines": 162,
+    "last_monitor_pulse_ts": "2026-11-27T14:40:29.9577038+00:00",
+    "step_start_ts": "2026-11-27T14:40:30.4073443+00:00",
+    "process_alive": false
+  },
+  "council": 15,
+  "death_bounds": {
+    "monitor": {
+      "regularity_ok": true,
+      "note": "regularity: last alive write + 0.5s cadence",
+      "death_vs_d1_end": "after",
+      "pulse_max_gap_secs": 0.514,
+      "death_vs_d2_start": "straddles",
+      "death_high_ts": "2026-11-27T14:40:30.4577038+00:00",
+      "pulse_count": 10,
+      "last_alive_ts": "2026-11-27T14:40:29.9577038+00:00",
+      "bounded_1s": true,
+      "window_secs": 0.5
+    },
+    "eye": {
+      "log_max_gap_secs": 1.0,
+      "note": "regularity: last alive write + 1s cadence",
+      "heartbeat_ts": "2026-11-27T14:40:30.0000000+00:00",
+      "bounded_1s": true,
+      "regularity_ok": true,
+      "last_log_ts": "2026-11-27T14:40:30.0000000+00:00",
+      "death_vs_d1_end": "after",
+      "window_secs": 1.0,
+      "exit_ts": null,
+      "death_high_ts": "2026-11-27T14:40:31.0000000+00:00",
+      "last_alive_ts": "2026-11-27T14:40:30.0000000+00:00",
+      "exit_code": null,
+      "death_vs_d2_start": "straddles"
+    },
+    "control": {
+      "regularity_ok": true,
+      "note": "regularity: last alive write + 0.5s cadence",
+      "death_vs_d1_end": "after",
+      "pulse_max_gap_secs": 0.543,
+      "exit_ts": null,
+      "death_vs_d2_start": "straddles",
+      "death_high_ts": "2026-11-27T14:40:30.4527281+00:00",
+      "pulse_count": 10,
+      "last_alive_ts": "2026-11-27T14:40:29.9527281+00:00",
+      "exit_code": null,
+      "bounded_1s": true,
+      "window_secs": 0.5
+    }
+  },
+  "arm_step_end_ts": "2026-11-27T14:40:25.0480711+00:00",
+  "runner_note": "does not prove device performance",
+  "m5_note": "any future success of (a) must be tagged: does not prove eye survival outside a live step nor device performance",
+  "run": 4
+}
