@@ -1,0 +1,84 @@
+{
+  "runner_note": "does not prove device performance",
+  "arm_ts": "2026-11-27T13:38:14.0140977+00:00",
+  "liveness_30s": {
+    "monitor_alive": false,
+    "heartbeat_age_secs": 33.3364463,
+    "last_ts": "2026-11-27T13:38:17Z",
+    "at": "30s",
+    "control_alive": false,
+    "log_lines": 166,
+    "process_alive": false
+  },
+  "control": {
+    "sleep_secs": 45,
+    "exit_ts": null,
+    "survived": false,
+    "exit_code": null,
+    "died_early": true,
+    "launch_ts": "2026-11-27T13:38:13.4496623+00:00",
+    "pid": 4628,
+    "lifetime_secs": null
+  },
+  "eye_exit": {
+    "monitor_file_present": false,
+    "natural": true,
+    "exit_ts": null,
+    "exit_code": null
+  },
+  "defender": {
+    "defender_realtime_protection": false
+  },
+  "monitor": {
+    "pid": 5616,
+    "started": true
+  },
+  "probes": {
+    "probe_sub_seen": false,
+    "probe_root_seen": false,
+    "probe_root": "C:\\bimo-slice\\diag-probe-root-diag-46008686608.exe",
+    "log_encrypted": false,
+    "probe_sub": "C:\\bimo-slice\\diag-probe-sub-diag-46008686608\\probe.exe"
+  },
+  "run_id": "46008686608",
+  "signature": "diagnosed-control-dead-early",
+  "reasons": [
+    "control (same launch, 45 s sleep) died before its sleep ended (lifetime 0 s; alive at 15 s: False; alive at 30 s: False): the killer is in the launch/step environment, not in the eye",
+    "monitor produced no exit files (monitor itself a D1 child): consistent with the arming step killing its children when it ends"
+  ],
+  "liveness_15s": {
+    "process_alive": false,
+    "monitor_alive": false,
+    "at": "15s",
+    "heartbeat_age_secs": 17.353671,
+    "log_lines": 166,
+    "last_ts": "2026-11-27T13:38:17Z",
+    "control_alive": false
+  },
+  "arm_step_end_ts": "2026-11-27T13:38:14.0148349+00:00",
+  "eye_pid": 6224,
+  "diag_id": "diag-46008686608",
+  "armed": true,
+  "stop": {
+    "last_ts": "2026-11-27T13:38:17Z",
+    "heartbeat_age_at_stop_secs": 38.6775885,
+    "has_agent_stop": false,
+    "eye_stopped_file": false,
+    "writer_exit_trace": null,
+    "control_exit_file_present": false,
+    "control_alive_at_stop": false,
+    "eye_exit_file_present": false,
+    "process_alive_at_stop": false,
+    "log_lines": 166,
+    "eye_killed_by_stop": false
+  },
+  "eventlog": {
+    "count": 0,
+    "window_end": "2026-11-27T13:39:08.0550153+00:00",
+    "entries": [],
+    "note": null,
+    "window_start": "2026-11-27T13:38:09.0140977+00:00",
+    "queried": true
+  },
+  "verdict": "diagnosed-control-dead-early"
+}
