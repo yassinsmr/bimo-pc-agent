@@ -351,7 +351,18 @@ pub fn install_product(msi_path: &str) -> u32 {
 /// heartbeat and hand.stop from a separate thread and sets `cancel`.
 /// `cancel_ms` is the rollback wait: the time from `cancel` being set
 /// until MsiInstallProductW returns (the `forced_ms` of the abort outcome).
+/// `cmdline` is the installer command line (public properties): the
+/// default is "REBOOT=ReallySuppress"; the slice passes
+/// "REBOOT=ReallySuppress TARGETDIR=<custom dir>" (§28.2 (a)) so the
+/// installer roots the install under the watched parent instead of the
+/// MSI default. NOTE: the msiexec.exe argument line is NEVER used on
+/// this path — the install goes through the API, so TARGETDIR must
+/// travel in this cmdline, not in ExecRequest.args.
 pub fn install_with_external_cancel(msi_path: &str, cancel: Arc<AtomicBool>) -> CancelOutcome {
+    install_with_external_cancel_cmdline(msi_path, "REBOOT=ReallySuppress", cancel)
+}
+
+pub fn install_with_external_cancel_cmdline(msi_path: &str, cmdline: &str, cancel: Arc<AtomicBool>) -> CancelOutcome {
     CANCEL_REQUESTED.store(false, Ordering::SeqCst);
     HANDLER_CALLS.store(0, Ordering::SeqCst);
   HANDLER_FIRST_MS.store(0, Ordering::SeqCst);
@@ -377,7 +388,7 @@ pub fn install_with_external_cancel(msi_path: &str, cancel: Arc<AtomicBool>) -> 
     let external_ui_prev = unsafe { MsiSetExternalUIW(Some(ui_handler), 0xFFFF_FFFF, std::ptr::null_mut()) };
     let start = Instant::now();
     let pkg = wide(msi_path);
-    let cmd = wide("REBOOT=ReallySuppress");
+    let cmd = wide(cmdline);
     let rc = unsafe { MsiInstallProductW(pkg.as_ptr(), cmd.as_ptr()) };
     let returned_at = Instant::now();
     done.store(true, Ordering::SeqCst);

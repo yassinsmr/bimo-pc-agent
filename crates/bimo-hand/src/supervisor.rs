@@ -671,6 +671,20 @@ pub fn run_msi_install_in_thread(
     std::sync::Arc<std::sync::atomic::AtomicBool>,
     std::sync::Arc<std::sync::Mutex<Option<crate::msi::CancelOutcome>>>,
 ) {
+    run_msi_install_in_thread_cmdline(msi_path, "REBOOT=ReallySuppress".to_string())
+}
+
+/// Same as `run_msi_install_in_thread` but with an explicit installer
+/// command line (public properties, e.g. TARGETDIR for the slice,
+/// §28.2 (a)). The cmdline is ignored by the non-Windows stub.
+#[cfg(not(windows))]
+pub fn run_msi_install_in_thread_cmdline(
+    msi_path: String,
+    _cmdline: String,
+) -> (
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
+    std::sync::Arc<std::sync::Mutex<Option<crate::msi::CancelOutcome>>>,
+) {
     let _ = msi_path;
     (
         std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -679,6 +693,9 @@ pub fn run_msi_install_in_thread(
             cancel_ms: 0,
             total_ms: 0,
             handler_calls: 0,
+            handler_first_ms: 0,
+            internal_ui_prev: 0,
+            external_ui_prev_non_null: false,
             cancelled: false,
         }))),
     )
@@ -691,12 +708,26 @@ pub fn run_msi_install_in_thread(
     std::sync::Arc<std::sync::atomic::AtomicBool>,
     std::sync::Arc<std::sync::Mutex<Option<crate::msi::CancelOutcome>>>,
 ) {
+    run_msi_install_in_thread_cmdline(msi_path, "REBOOT=ReallySuppress".to_string())
+}
+
+/// Same as `run_msi_install_in_thread` but with an explicit installer
+/// command line (public properties, e.g. TARGETDIR for the slice,
+/// §28.2 (a)).
+#[cfg(windows)]
+pub fn run_msi_install_in_thread_cmdline(
+    msi_path: String,
+    cmdline: String,
+) -> (
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
+    std::sync::Arc<std::sync::Mutex<Option<crate::msi::CancelOutcome>>>,
+) {
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let outcome = std::sync::Arc::new(std::sync::Mutex::new(None));
     let cancel2 = std::sync::Arc::clone(&cancel);
     let outcome2 = std::sync::Arc::clone(&outcome);
     std::thread::spawn(move || {
-        let result = crate::msi::install_with_external_cancel(&msi_path, cancel2);
+        let result = crate::msi::install_with_external_cancel_cmdline(&msi_path, &cmdline, cancel2);
         if let Ok(mut slot) = outcome2.lock() {
             *slot = Some(result);
         }

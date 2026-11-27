@@ -73,8 +73,55 @@ pub fn dedup_key_for(kind: &str, args: &Value) -> String {
     format!("v1:{}:{}", kind, sha256_hex(canonical_json(args).as_bytes()))
 }
 
-/// A random 128-bit hex nonce (time + pid + counter, hashed).
+/// System CSPRNG: 16 random bytes (128-bit nonce).
+/// Windows: BCryptGenRandom with the system-preferred RNG (bcrypt.dll,
+/// same raw-extern pattern as msi.rs — no new dependency).
+/// Other platforms: /dev/urandom. Both are the OS CSPRNG; the old
+/// time+pid+counter material survives only as a documented last-resort
+/// fallback if the OS source itself fails (it never does in practice).
+#[cfg(windows)]
+mod csprng {
+    #[link(name = "bcrypt")]
+    extern "system" {
+        fn BCryptGenRandom(
+            halgorithm: *mut std::ffi::c_void,
+            buffer: *mut u8,
+            size: u32,
+            flags: u32,
+        ) -> i32;
+    }
+    pub fn random_16() -> Option<[u8; 16]> {
+        let mut buf = [0u8; 16];
+        // hAlgorithm NULL + BCRYPT_USE_SYSTEM_PREFERRED_RNG (0x2).
+        let rc = unsafe { BCryptGenRandom(std::ptr::null_mut(), buf.as_mut_ptr(), 16, 0x0000_0002) };
+        if rc == 0 {
+            Some(buf)
+        } else {
+            None
+        }
+    }
+}
+#[cfg(not(windows))]
+mod csprng {
+    pub fn random_16() -> Option<[u8; 16]> {
+        use std::io::Read;
+        let mut buf = [0u8; 16];
+        std::fs::File::open("/dev/urandom")
+            .ok()?
+            .read_exact(&mut buf)
+            .ok()?;
+        Some(buf)
+    }
+}
+
+/// A random 128-bit hex nonce from the system CSPRNG (§30.1 fix:
+/// the old time+pid+counter material was predictable).
 pub fn new_nonce() -> String {
+    if let Some(bytes) = csprng::random_16() {
+        return crate::hex_encode(&bytes);
+    }
+    // Last-resort fallback only (OS CSPRNG unavailable): the old
+    // material, labelled here so no reader mistakes it for random.
     let n = NONCE_COUNTER.fetch_add(1, Ordering::SeqCst);
     let material = format!(
         "{}-{}-{}-{:?}",
@@ -431,5 +478,18 @@ mod tests {
         let b = dedup_key_for("install", &json!({"v": 2, "id": "x"}));
         assert_eq!(a, b);
         assert!(a.starts_with("v1:install:"));
+    }
+
+    #[test]
+    fn nonce_is_32_hex_and_unique() {
+        // Sanity only: uniqueness + shape. A unit test cannot prove
+        // CSPRNG quality; the source (BCrypt / /dev/urandom) is the claim.
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..1000 {
+            let n = new_nonce();
+            assert_eq!(n.len(), 32, "nonce must be 128-bit hex");
+            assert!(n.chars().all(|c| c.is_ascii_hexdigit()));
+            assert!(seen.insert(n), "duplicate nonce");
+        }
     }
 }

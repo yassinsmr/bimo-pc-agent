@@ -15,24 +15,34 @@
 //! Usage: `bimo-hand-self-test --out hand-self-test.json
 //! [--supervisor-bin <path>]` (default: same dir as this binary).
 //!
+//! Slice mode (8.12, Track A Unit 3): `bimo-hand-self-test --slice
+//! --slice-inputs <slice-inputs.json> --data-dir <hand-data>
+//! --out <hand-slice.json> [--slice-phase install|revert]` — runs the
+//! negative tests + S2+S3 (install phase) or S7 (revert phase), never
+//! proofs 8.1–8.11. See the 8.12 section in this file for the
+//! two-invocation design (builder decision B1) and the per-phase
+//! slice_exit_code (builder decision B2).
+//!
 //! If the RED LINE proof (8.1) fails while the installer was running
 //! (anything survives past 5 s, or handles stay held), the verdict is
 //! `fail` + `red_line: violated` — verdict (c), no new council.
 
 use bimo_hand::control::{HandControl, DEADMAN_MISSED_BEATS};
 use bimo_hand::executor::{
-    exec_started_path, free_space_bytes, prepare_execution, required_bytes,
-    wait_exec_result, write_exec_request, ExecRequest, HandConfig,
+    exec_request_path, exec_result_path, exec_started_path, free_space_bytes,
+    prepare_execution, read_exec_result, required_bytes, wait_exec_result,
+    write_exec_request, ExecRequest, HandConfig,
 };
 use bimo_hand::guardian::{quarantine_copy, Guardian, EICAR};
-use bimo_hand::queue::{new_command, EnqueueOutcome, Queue};
-use bimo_hand::revert::{revert, RevertOutcome};
+use bimo_hand::queue::{new_command, Command, EnqueueOutcome, Queue};
+use bimo_hand::revert::{revert, verify_revert_plan, RevertOutcome};
 use bimo_hand::supervisor::system_memory_mb;
 use bimo_hand::{alert_event, file_sha256, sha256_hex, utc_now_secs, write_json_file};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as ProcCommand};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 const VLC_PRIMARY: &str =
@@ -495,6 +505,8 @@ fn proof_8_5(ctx: &mut Ctx) -> Proof {
         installer_kind: None,
         product_code: None,
         name_substring: None,
+        expected_sha256: None,
+        targetdir: None,
     };
     if write_exec_request(&ctx.data_dir, &req).is_err() {
         return fail(json!({"reason": "could not write exec request"}));
@@ -1198,10 +1210,1010 @@ fn proof_8_1(ctx: &mut Ctx) -> Proof {
     }
     pass(measured)
 }
+// ---------------------------------------------------------------------------
+// 8.12 — Track A Unit 3 thin slice (spec: track-a-unit3-thin-slice.md,
+// v6 + §45 + §45.9; §28.2 ruling (ج)→(أ) from the cycle-54 council).
+//
+// TWO INVOCATIONS (builder decision B1 — the spec never names how the
+// workflow steps S4/S5/S6 interleave between S3 and S7 inside one 8.12
+// run; two invocations invent less protocol than a wait-file design):
+//   phase install: --slice --slice-inputs <path> --data-dir <dir>
+//                  [--slice-phase install]  (default)
+//     loads inputs, runs the negative tests (8.12e←e2←e3←e4←a←b←c←d←f),
+//     runs the happy path (S2+S3), writes hand-slice.json to --out
+//     BEFORE stopping the supervisor, exits 0/1.
+//   phase revert:  --slice --slice-inputs <path> --data-dir <dir>
+//                  --slice-phase revert
+//     rebuilds the slice command from slice-inputs.json, runs S7
+//     (revert() in a thread + 600 s join timeout, §45.9.5), updates
+//     hand-slice.json (steps.s7 + slice_exit_code), exits 0/1.
+// S4 (witness), S5 (shot), S6 (strong evidence) and S8 (publish) are
+// WORKFLOW steps between the two phases; the final slice verdict lives
+// in the workflow's slice-results.json (builder decision B2:
+// hand-slice.json's slice_exit_code is the verdict of the phase that
+// wrote it last, not the whole slice).
+//
+// §28.2 (a) adaptations (council ruling, cycle 54): the install goes
+// to a custom dir under a pre-created watched parent
+// (C:\bimo-slice\Notepad++), via TARGETDIR — in the MsiInstallProduct
+// command line (the supervisor never runs msiexec.exe) AND in the
+// ExecRequest args line. S0/S6/install_dir/install_location_expected
+// use the custom path, NOT C:\Program Files\Notepad++.
+// ---------------------------------------------------------------------------
+
+/// §29-4: the published SHA-256 of npp.8.9.9.1.Installer.x64.msi.
+const SLICE_MSI_SHA256: &str =
+    "e3b0607a092ce2604fbdac027db2c94915995e8e568ebd226f8c5493c2f61a80";
+/// §29-5: the measured size of the same MSI.
+const SLICE_MSI_SIZE: u64 = 7_933_952;
+/// §28.2 (a): the custom install dir under the pre-created watched
+/// parent C:\bimo-slice. The workflow creates the parent before S0b.
+const SLICE_INSTALL_DIR: &str = r"C:\bimo-slice\Notepad++";
+/// Start Menu folder the installer creates (§37.2 check 3).
+const SLICE_START_MENU_DIR: &str =
+    r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Notepad++";
+/// 64 zero hex chars — the deliberately-wrong expected hash for 8.12e2/8.12e4/8.12b.
+const ZERO_SHA256: &str =
+    "0000000000000000000000000000000000000000000000000000000000000000";
+/// The probe request id (§33.2).
+const PROBE_ID: &str = "slice-probe-8.12d";
+/// The synthetic revert command id (§41.2).
+const PROBE_REVERT_ID: &str = "slice-probe-8.12d-revert";
+
+/// The measured values S1 hands to 8.12 (§34.1, as adapted by §28.2 (a)).
+#[derive(Clone, Debug)]
+struct SliceInputs {
+    slice_id: String,
+    command_id: String,
+    msi_path: String,
+    msi_sha256: String,
+    msi_size_bytes: u64,
+    product_code: String,
+    upgrade_code: String,
+    install_dir: String,
+    install_location_expected: String,
+    name_substring: String,
+    ttl_secs: u64,
+}
+
+fn is_guid(s: &str) -> bool {
+    s.len() == 38
+        && s.starts_with('{')
+        && s.ends_with('}')
+        && s[1..37].chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+}
+
+fn is_hex64(s: &str) -> bool {
+    s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Load + validate slice-inputs.json (§34.1 + §28.2 (a)). Any failure is
+/// `slice-inputs-invalid` (R12): blocked, no command in the queue.
+fn load_slice_inputs(path: &Path) -> Result<SliceInputs, String> {
+    let raw = fs::read_to_string(path)
+        .map_err(|e| format!("slice-inputs-invalid: cannot read {}: {}", path.display(), e))?;
+    let v: Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("slice-inputs-invalid: malformed JSON: {}", e))?;
+    let get_s = |k: &str| -> Result<String, String> {
+        v.get(k)
+            .and_then(|x| x.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| format!("slice-inputs-invalid: missing/invalid field {}", k))
+    };
+    let get_u = |k: &str| -> Result<u64, String> {
+        v.get(k)
+            .and_then(|x| x.as_u64())
+            .ok_or_else(|| format!("slice-inputs-invalid: missing/invalid field {}", k))
+    };
+    let inputs = SliceInputs {
+        slice_id: get_s("slice_id")?,
+        command_id: get_s("command_id")?,
+        msi_path: get_s("msi_path")?,
+        msi_sha256: get_s("msi_sha256")?,
+        msi_size_bytes: get_u("msi_size_bytes")?,
+        product_code: get_s("product_code")?,
+        upgrade_code: get_s("upgrade_code")?,
+        install_dir: get_s("install_dir")?,
+        install_location_expected: get_s("install_location_expected")?,
+        name_substring: get_s("name_substring")?,
+        ttl_secs: get_u("ttl_secs")?,
+    };
+    if inputs.slice_id.is_empty() {
+        return Err("slice-inputs-invalid: slice_id is empty".to_string());
+    }
+    if inputs.command_id.is_empty()
+        || !inputs
+            .command_id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
+        return Err("slice-inputs-invalid: command_id must match [a-z0-9-]+".to_string());
+    }
+    if !Path::new(&inputs.msi_path).exists() {
+        return Err(format!(
+            "slice-inputs-invalid: msi_path does not exist: {}",
+            inputs.msi_path
+        ));
+    }
+    if !is_hex64(&inputs.msi_sha256) || inputs.msi_sha256.to_lowercase() != SLICE_MSI_SHA256 {
+        return Err("slice-inputs-invalid: msi_sha256 must equal §29-4".to_string());
+    }
+    let actual_size = file_size(Path::new(&inputs.msi_path));
+    if inputs.msi_size_bytes != actual_size || inputs.msi_size_bytes != SLICE_MSI_SIZE {
+        return Err(format!(
+            "slice-inputs-invalid: msi_size_bytes {} != actual {} / §29-5 {}",
+            inputs.msi_size_bytes, actual_size, SLICE_MSI_SIZE
+        ));
+    }
+    if !is_guid(&inputs.product_code) {
+        return Err("slice-inputs-invalid: product_code is not a GUID".to_string());
+    }
+    if !is_guid(&inputs.upgrade_code) {
+        return Err("slice-inputs-invalid: upgrade_code is not a GUID".to_string());
+    }
+    // §28.2 (a): the custom dir, NOT C:\Program Files\Notepad++.
+    if inputs.install_dir != SLICE_INSTALL_DIR {
+        return Err(format!(
+            "slice-inputs-invalid: install_dir must be {} under §28.2 (a), got {}",
+            SLICE_INSTALL_DIR, inputs.install_dir
+        ));
+    }
+    if inputs.install_location_expected != SLICE_INSTALL_DIR {
+        return Err("slice-inputs-invalid: install_location_expected must equal install_dir (§28.2 (a))".to_string());
+    }
+    if inputs.name_substring != "Notepad++" {
+        return Err("slice-inputs-invalid: name_substring must be \"Notepad++\"".to_string());
+    }
+    if inputs.ttl_secs != 3600 {
+        return Err("slice-inputs-invalid: ttl_secs must be 3600".to_string());
+    }
+    Ok(inputs)
+}
+
+/// Installed iff MsiQueryProductStateW reports anything other than
+/// UNKNOWN(-1) or ABSENT(2). Fail-closed: any other state (including
+/// error codes) counts as present — the same spirit as §37.1 (assume
+/// presence when unreadable). The Linux stub returns -1 (not installed).
+fn product_is_installed(code: &str) -> bool {
+    !matches!(bimo_hand::msi::product_state(code), -1 | 2)
+}
+
+/// The four "clean" checks (§37.2), under the §28.2 (a) path: the
+/// install dir is the custom dir, the Start Menu folder and the
+/// uninstall registry key are as §37.2 names them. The registry key is
+/// read with `reg.exe query` (read-only); a failed/unreadable read
+/// counts as PRESENT (fail-closed).
+fn check_clean(inputs: &SliceInputs) -> Value {
+    let state = bimo_hand::msi::product_state(&inputs.product_code);
+    let product_absent = !product_is_installed(&inputs.product_code);
+    let dir_absent = !Path::new(&inputs.install_dir).exists();
+    let menu_absent = !Path::new(SLICE_START_MENU_DIR).exists();
+    let key = format!(
+        r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{}",
+        inputs.product_code
+    );
+    let key_absent = if cfg!(windows) {
+        match ProcCommand::new("reg.exe")
+            .args(["query", &key])
+            .output()
+        {
+            Ok(o) => !o.status.success(),
+            Err(_) => false, // unreadable => present (fail-closed)
+        }
+    } else {
+        false // no registry on this platform => present (fail-closed)
+    };
+    json!({
+        "product_state": state,
+        "product_absent": product_absent,
+        "install_dir_absent": dir_absent,
+        "start_menu_absent": menu_absent,
+        "uninstall_key_absent": key_absent,
+        "clean": product_absent && dir_absent && menu_absent && key_absent,
+    })
+}
+
+/// Poll the probe result file every 1 s until `timeout`. "Arrival"
+/// (§45.9.1) is a valid JSON file whose `status` field is a string;
+/// a corrupt file or one without a string status does NOT count as
+/// arrival — waiting continues. (This is wait_exec_result's contract
+/// with the §45.9.1 arrival definition enforced.)
+fn wait_probe_result(data_dir: &Path, id: &str, timeout: Duration) -> Option<Value> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(v) = read_exec_result(data_dir, id) {
+            if v.get("status").and_then(|s| s.as_str()).is_some() {
+                return Some(v);
+            }
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
+}
+
+/// Run `revert()` in a thread and wait up to `timeout` for it (§45.9.5:
+/// the 600 s S7 bound is a thread + join timeout — a single stuck
+/// MsiConfigureProductW call can exceed the 60 s inner wait).
+/// Returns None on timeout (the thread is left running, detached).
+fn revert_with_timeout(cmd: &Command, data_dir: &Path, timeout: Duration) -> Option<RevertOutcome> {
+    let (tx, rx) = mpsc::channel();
+    let cmd = cmd.clone();
+    let data_dir = data_dir.to_path_buf();
+    std::thread::spawn(move || {
+        let outcome = revert(&cmd, &data_dir);
+        let _ = tx.send(outcome);
+    });
+    rx.recv_timeout(timeout).ok()
+}
+
+/// The synthetic revert command (§41.2): built directly in 8.12, never
+/// written to the queue, never through the guardian or supervisor.
+fn synthetic_revert_cmd(inputs: &SliceInputs) -> Command {
+    new_command(
+        PROBE_REVERT_ID,
+        "install",
+        json!({"product_code": inputs.product_code, "name_substring": inputs.name_substring}),
+        3600,
+        json!({"product_code": inputs.product_code, "name_substring": inputs.name_substring}),
+    )
+}
+
+/// Run the synthetic revert (§41.2) + the §37.2 clean check.
+/// Returns (ran, result_json). `result` is "reverted" on success, else
+/// "failed:<reason>" or "revert-plan-invalid" or "timeout".
+fn run_synthetic_revert(inputs: &SliceInputs, data_dir: &Path) -> (bool, Value) {
+    let cmd = synthetic_revert_cmd(inputs);
+    if !verify_revert_plan(&cmd) {
+        return (true, json!({"result": "revert-plan-invalid"}));
+    }
+    let start = Instant::now();
+    match revert_with_timeout(&cmd, data_dir, Duration::from_secs(600)) {
+        None => (
+            true,
+            json!({"result": "timeout", "duration_ms": start.elapsed().as_millis() as u64}),
+        ),
+        Some(RevertOutcome::Reverted) => {
+            let clean = check_clean(inputs);
+            (
+                true,
+                json!({
+                    "result": "reverted",
+                    "duration_ms": start.elapsed().as_millis() as u64,
+                    "clean": clean,
+                }),
+            )
+        }
+        Some(RevertOutcome::Failed(reason)) => (
+            true,
+            json!({
+                "result": format!("failed:{}", reason),
+                "duration_ms": start.elapsed().as_millis() as u64,
+            }),
+        ),
+        Some(RevertOutcome::NotReversible(reason)) => (
+            true,
+            json!({
+                "result": format!("not-reversible:{}", reason),
+                "duration_ms": start.elapsed().as_millis() as u64,
+            }),
+        ),
+    }
+}
+
+/// Build the slice command (§34.5 + §44.1). `approved` is true only
+/// for the happy path (and 8.12e4/8.12a–c, which test the hash gate
+/// past the class gate); the class-gate tests keep it false.
+/// `expected` is None for 8.12c (no hash field at all).
+fn build_slice_command(
+    inputs: &SliceInputs,
+    approved: bool,
+    expected: Option<String>,
+    msi_path_override: Option<String>,
+) -> Command {
+    let mut args = json!({
+        "msi": msi_path_override.unwrap_or_else(|| inputs.msi_path.clone()),
+        "uninstall": false,
+        "install_dir": inputs.install_dir,
+        "name_substring": inputs.name_substring,
+        "size_bytes": inputs.msi_size_bytes,
+        "product_code": inputs.product_code,
+        "targetdir": true,
+    });
+    if let Some(h) = expected {
+        args["expected_sha256"] = json!(h);
+    }
+    let mut cmd = new_command(
+        &inputs.command_id,
+        "install",
+        args,
+        inputs.ttl_secs,
+        json!({"product_code": inputs.product_code, "name_substring": inputs.name_substring}),
+    );
+    cmd.approved = approved;
+    cmd
+}
+
+/// One `prepare_execution` negative case: expect `Err(<expected>)`
+/// with EXACT string match (§45.4.3) and no exec-request file written
+/// for the command id. Returns the case record.
+fn neg_case(config: &HandConfig, data_dir: &Path, name: &str, cmd: &Command, expected: &str) -> Value {
+    let got = match prepare_execution(cmd, config, &Guardian::default()) {
+        Ok(_) => "ok".to_string(),
+        Err(e) => e,
+    };
+    let req_written = exec_request_path(data_dir, &cmd.id).exists();
+    let pass = got == expected && !req_written;
+    println!("  8.12 {}: expected={} got={} request_file_written={} -> {}",
+        name, expected, got, req_written, if pass { "pass" } else { "FAIL" });
+    json!({
+        "name": name, "expected": expected, "got": got,
+        "request_file_written": req_written, "pass": pass,
+    })
+}
+
+struct ProbeOutcome {
+    record: Value,
+    pass: bool,
+    /// probe-timeout-unsettled (§45.1 step 4): the caller must
+    /// `process::exit(1)` directly — no hand-slice.json, no
+    /// hand.supervisor-exit, supervisor left alive.
+    unsettled: bool,
+}
+
+fn probe_fail_record(status: &str, reason: &str, waited_ms: u64, product_state_after: i32, exec_started_seen: bool, revert: Value, stop_resumed: bool) -> ProbeOutcome {
+    ProbeOutcome {
+        record: json!({
+            "status": status, "reason": reason, "exec_started_seen": exec_started_seen,
+            "waited_ms": waited_ms, "product_state_after": product_state_after,
+            "revert": revert, "stop_resumed": stop_resumed,
+        }),
+        pass: false,
+        unsettled: false,
+    }
+}
+
+/// The §41.4 safety net: the gate is absent (an install launched).
+/// ProductState first; if installed, run the synthetic revert + the
+/// §37.2 clean check, then fail probe-gate-absent. A failed synthetic
+/// revert (or a failed clean check) is fail-revert-failed (R4), not
+/// probe-gate-absent. If nothing is installed, probe-gate-absent
+/// directly, no revert (§45.9.2).
+fn probe_safety_net(inputs: &SliceInputs, data_dir: &Path, _status: &str, reason: &str, waited_ms: u64, exec_started_seen: bool) -> ProbeOutcome {
+    let product_state_after = bimo_hand::msi::product_state(&inputs.product_code);
+    if !product_is_installed(&inputs.product_code) {
+        return probe_fail_record(
+            "probe-gate-absent", reason, waited_ms, product_state_after,
+            exec_started_seen, json!({"ran": false, "result": Value::Null}), false,
+        );
+    }
+    let (ran, rev) = run_synthetic_revert(inputs, data_dir);
+    let revert_ok = rev.get("result").and_then(|r| r.as_str()) == Some("reverted");
+    let clean_ok = rev
+        .get("clean")
+        .and_then(|c| c.get("clean"))
+        .and_then(|b| b.as_bool())
+        .unwrap_or(false);
+    if revert_ok && clean_ok {
+        probe_fail_record(
+            "probe-gate-absent", reason, waited_ms, product_state_after,
+            exec_started_seen, json!({"ran": ran, "result": rev}), false,
+        )
+    } else {
+        probe_fail_record(
+            "fail-revert-failed", reason, waited_ms, product_state_after,
+            exec_started_seen, json!({"ran": ran, "result": rev}), false,
+        )
+    }
+}
+
+/// Judge a probe result that arrived (§33.2 + §45.9.2).
+fn probe_judge_result(inputs: &SliceInputs, data_dir: &Path, v: Value, waited_ms: u64, exec_started_seen: bool, stop_resumed: bool) -> ProbeOutcome {
+    let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("").to_string();
+    let reason = v.get("reason").and_then(|s| s.as_str()).unwrap_or("").to_string();
+    let product_state_after = bimo_hand::msi::product_state(&inputs.product_code);
+    // stop-unconfirmed (§45.9.1): the abort thread did not return
+    // within the hard cap — the machine is untrusted.
+    if status == "stop-unconfirmed" {
+        return ProbeOutcome {
+            record: json!({
+                "status": "probe-timeout-unsettled", "reason": reason,
+                "exec_started_seen": exec_started_seen, "waited_ms": waited_ms,
+                "product_state_after": product_state_after,
+                "revert": {"ran": false, "result": Value::Null}, "stop_resumed": stop_resumed,
+            }),
+            pass: false,
+            unsettled: true,
+        };
+    }
+    // The exec-started tripwire (§41.3): presence means the request
+    // went to the non-MSI branch — the gate is absent, whatever the
+    // result says.
+    if exec_started_seen {
+        return probe_safety_net(inputs, data_dir, &status, &reason, waited_ms, true);
+    }
+    match (status.as_str(), reason.as_str()) {
+        ("blocked", "sha256-required") => {
+            if product_is_installed(&inputs.product_code) {
+                // Contradiction: blocked yet installed — fail-closed
+                // through the safety net.
+                probe_safety_net(inputs, data_dir, &status, &reason, waited_ms, false)
+            } else {
+                ProbeOutcome {
+                    record: json!({
+                        "status": "pass", "reason": "sha256-required",
+                        "exec_started_seen": false, "waited_ms": waited_ms,
+                        "product_state_after": product_state_after,
+                        "revert": {"ran": false, "result": Value::Null},
+                        "stop_resumed": stop_resumed,
+                    }),
+                    pass: true,
+                    unsettled: false,
+                }
+            }
+        }
+        ("blocked", _) => probe_fail_record(
+            "probe-wrong-reason", &reason, waited_ms, product_state_after,
+            false, json!({"ran": false, "result": Value::Null}), stop_resumed,
+        ),
+        ("done", _) | ("stopped", _) | ("failed", _) => {
+            probe_safety_net(inputs, data_dir, &status, &reason, waited_ms, false)
+        }
+        _ => probe_fail_record(
+            "probe-wrong-reason", &reason, waited_ms, product_state_after,
+            false, json!({"ran": false, "result": Value::Null}), stop_resumed,
+        ),
+    }
+}
+
+/// The K1 quiescence step (§45.1): after 120 s with no result and the
+/// product still absent — write hand.stop ("probe-still"), wait 60 s
+/// for the result, judge by what arrives.
+fn probe_quiescence(inputs: &SliceInputs, data_dir: &Path, ctl: &HandControl, started: Instant, exec_started_seen: bool) -> ProbeOutcome {
+    // C-1 step 0: delete the stale result file before writing hand.stop,
+    // so an old file is never read as a new result.
+    let _ = fs::remove_file(exec_result_path(data_dir, PROBE_ID));
+    let _ = ctl.write_stop("probe-still");
+    let result = wait_probe_result(data_dir, PROBE_ID, Duration::from_secs(60));
+    let waited_ms = started.elapsed().as_millis() as u64;
+    match result {
+        Some(v) => {
+            let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("").to_string();
+            let reason = v.get("reason").and_then(|s| s.as_str()).unwrap_or("").to_string();
+            if status == "blocked" && reason == "sha256-required" {
+                // Late success — delete hand.stop BEFORE any new request
+                // (§45.1.1): otherwise S3's request is cancelled at once.
+                let _ = ctl.clear_stop();
+                let product_state_after = bimo_hand::msi::product_state(&inputs.product_code);
+                ProbeOutcome {
+                    record: json!({
+                        "status": "pass", "reason": "sha256-required",
+                        "exec_started_seen": exec_started_seen, "waited_ms": waited_ms,
+                        "product_state_after": product_state_after,
+                        "revert": {"ran": false, "result": Value::Null},
+                        "stop_resumed": true,
+                    }),
+                    pass: true,
+                    unsettled: false,
+                }
+            } else {
+                // hand.stop is deleted before the normal stop (§45.9.1).
+                // stop_resumed stays false: it means "deleted after a
+                // LATE SUCCESS" (§45.7), and there was none here.
+                let _ = ctl.clear_stop();
+                probe_judge_result(inputs, data_dir, v, waited_ms, exec_started_seen, false)
+            }
+        }
+        None => {
+            // probe-timeout-unsettled (§45.1 step 4): loud fail, no
+            // hand-slice.json, no hand.supervisor-exit, supervisor
+            // left alive, exit(1) directly. The runner discards the
+            // machine (§27.2).
+            ProbeOutcome {
+                record: json!({
+                    "status": "probe-timeout-unsettled", "reason": "no-result-after-quiescence",
+                    "exec_started_seen": exec_started_seen, "waited_ms": waited_ms,
+                    "product_state_after": bimo_hand::msi::product_state(&inputs.product_code),
+                    "revert": {"ran": false, "result": Value::Null}, "stop_resumed": false,
+                }),
+                pass: false,
+                unsettled: true,
+            }
+        }
+    }
+}
+
+/// The 8.12d supervisor-refusal probe (§33.2 + §41 + §45.1).
+/// Writes the manual request (no expected_sha256), waits 60 s + a
+/// 60 s grace period (§41.1 step 1), then judges.
+fn probe_8_12d(inputs: &SliceInputs, data_dir: &Path, ctl: &HandControl) -> ProbeOutcome {
+    let started = Instant::now();
+    // Defensive: a stale result from an earlier run in the same
+    // data_dir must never be read as this probe's result.
+    let _ = fs::remove_file(exec_result_path(data_dir, PROBE_ID));
+    let req = ExecRequest {
+        id: PROBE_ID.to_string(),
+        kind: "install".to_string(),
+        program: "msiexec.exe".to_string(),
+        args: vec![
+            "/i".to_string(),
+            inputs.msi_path.clone(),
+            "/qn".to_string(),
+            "/norestart".to_string(),
+        ],
+        working_dir: None,
+        cleanup_path: None,
+        install_dir: Some(inputs.install_dir.clone()),
+        grandchild_out: None,
+        installer_kind: Some("msi".to_string()),
+        product_code: Some(inputs.product_code.clone()),
+        name_substring: Some("Notepad++".to_string()),
+        expected_sha256: None,
+        // The probe tests the gate, not the install: no TARGETDIR.
+        targetdir: None,
+    };
+    if let Err(e) = write_exec_request(data_dir, &req) {
+        return probe_fail_record(
+            "probe-request-write-failed", &e, started.elapsed().as_millis() as u64,
+            bimo_hand::msi::product_state(&inputs.product_code),
+            false, json!({"ran": false, "result": Value::Null}), false,
+        );
+    }
+    let mut result = wait_probe_result(data_dir, PROBE_ID, Duration::from_secs(60));
+    if result.is_none() {
+        // Grace period (§41.1 step 1): a slow install is not judged
+        // by the first timeout. Total 120 s from the request write.
+        result = wait_probe_result(data_dir, PROBE_ID, Duration::from_secs(60));
+    }
+    let waited_ms = started.elapsed().as_millis() as u64;
+    let exec_started_seen = exec_started_path(data_dir, PROBE_ID).exists();
+    match result {
+        Some(v) => probe_judge_result(inputs, data_dir, v, waited_ms, exec_started_seen, false),
+        None => {
+            // 120 s, no result: ProductState decides (§41.1 step 2).
+            if product_is_installed(&inputs.product_code) {
+                let (ran, rev) = run_synthetic_revert(inputs, data_dir);
+                let revert_ok = rev.get("result").and_then(|r| r.as_str()) == Some("reverted");
+                let clean_ok = rev
+                    .get("clean")
+                    .and_then(|c| c.get("clean"))
+                    .and_then(|b| b.as_bool())
+                    .unwrap_or(false);
+                let product_state_after = bimo_hand::msi::product_state(&inputs.product_code);
+                if revert_ok && clean_ok {
+                    probe_fail_record(
+                        "probe-timeout", "no-result-installed-reverted-clean",
+                        waited_ms, product_state_after, exec_started_seen,
+                        json!({"ran": ran, "result": rev}), false,
+                    )
+                } else {
+                    probe_fail_record(
+                        "fail-revert-failed", "no-result-installed-revert-or-clean-failed",
+                        waited_ms, product_state_after, exec_started_seen,
+                        json!({"ran": ran, "result": rev}), false,
+                    )
+                }
+            } else {
+                probe_quiescence(inputs, data_dir, ctl, started, exec_started_seen)
+            }
+        }
+    }
+}
+
+/// Make a tampered copy of the MSI (one byte flipped) for 8.12a/8.12c.
+/// Sanity: its hash must differ from the published one, or the test
+/// itself is broken.
+fn make_tampered_copy(inputs: &SliceInputs, work_dir: &Path) -> Result<PathBuf, String> {
+    let mut bytes = fs::read(&inputs.msi_path)
+        .map_err(|e| format!("tampered-copy: cannot read MSI: {}", e))?;
+    if bytes.len() <= 4096 {
+        return Err("tampered-copy: MSI too small to flip byte 4096".to_string());
+    }
+    bytes[4096] ^= 0xFF;
+    let path = work_dir.join("npp-tampered.msi");
+    fs::write(&path, &bytes).map_err(|e| format!("tampered-copy: cannot write: {}", e))?;
+    let h = file_sha256(&path).unwrap_or_default();
+    if h == SLICE_MSI_SHA256 {
+        return Err("tampered-copy: hash identical to the original — test broken".to_string());
+    }
+    Ok(path)
+}
+
+/// Phase `install` (§43.3 order): negatives first, then the happy path
+/// (S2+S3). Returns (exit_code, Some(hand_slice)) — or (1, None) for
+/// probe-timeout-unsettled (§45.1 step 4: no hand-slice.json at all).
+fn run_slice_install(
+    inputs: &SliceInputs,
+    config: &HandConfig,
+    data_dir: &Path,
+    work_dir: &Path,
+    ctl: &HandControl,
+    supervisor_started: bool,
+) -> (i32, Option<Value>) {
+    let product_state_before = bimo_hand::msi::product_state(&inputs.product_code);
+    let folder_before = Path::new(&inputs.install_dir).exists();
+
+    // --- Negative tests, in the final order (§45.9.4):
+    // 8.12e ← e2 ← e3 ← e4 ← a ← b ← c ← d ← f ← happy path.
+    let correct = Some(SLICE_MSI_SHA256.to_string());
+    let zero = Some(ZERO_SHA256.to_string());
+    let e1 = neg_case(
+        config, data_dir, "8.12e",
+        &build_slice_command(inputs, false, correct.clone(), None),
+        "needs_approval",
+    );
+    let e2 = neg_case(
+        config, data_dir, "8.12e2",
+        &build_slice_command(inputs, false, zero.clone(), None),
+        "needs_approval",
+    );
+    let fake_msi = format!("{}-missing.msi", inputs.msi_path);
+    let e3 = neg_case(
+        config, data_dir, "8.12e3",
+        &build_slice_command(inputs, false, correct.clone(), Some(fake_msi)),
+        "file_not_found",
+    );
+    let e4 = neg_case(
+        config, data_dir, "8.12e4",
+        &build_slice_command(inputs, true, zero.clone(), None),
+        "sha256-mismatch",
+    );
+    let tampered = match make_tampered_copy(inputs, work_dir) {
+        Ok(p) => Some(p),
+        Err(e) => {
+            println!("  8.12a/c: tampered copy failed: {}", e);
+            None
+        }
+    };
+    let (a_case, b_case, c_case) = match &tampered {
+        Some(t) => {
+            let t = t.to_string_lossy().to_string();
+            (
+                neg_case(config, data_dir, "8.12a",
+                    &build_slice_command(inputs, true, correct.clone(), Some(t.clone())),
+                    "sha256-mismatch"),
+                neg_case(config, data_dir, "8.12b",
+                    &build_slice_command(inputs, true, zero.clone(), None),
+                    "sha256-mismatch"),
+                neg_case(config, data_dir, "8.12c",
+                    &build_slice_command(inputs, true, None, Some(t)),
+                    "sha256-required"),
+            )
+        }
+        None => (
+            json!({"name": "8.12a", "expected": "sha256-mismatch", "got": "tampered-copy-failed", "request_file_written": false, "pass": false}),
+            json!({"name": "8.12b", "expected": "sha256-mismatch", "got": "tampered-copy-failed", "request_file_written": false, "pass": false}),
+            json!({"name": "8.12c", "expected": "sha256-required", "got": "tampered-copy-failed", "request_file_written": false, "pass": false}),
+        ),
+    };
+    // 8.12f (§45.9.3): a slice command with an invalid revert plan
+    // must fail verify_revert_plan — proving the K3(a) call exists.
+    let bad_plan_cmd = new_command(
+        &inputs.command_id,
+        "install",
+        json!({
+            "msi": inputs.msi_path, "uninstall": false,
+            "install_dir": inputs.install_dir, "name_substring": inputs.name_substring,
+            "size_bytes": inputs.msi_size_bytes, "product_code": inputs.product_code,
+            "targetdir": true,
+        }),
+        inputs.ttl_secs,
+        json!({}),
+    );
+    let f_valid = verify_revert_plan(&bad_plan_cmd);
+    let f_case = json!({
+        "name": "8.12f", "expected": "revert-plan-invalid",
+        "got": if f_valid { "verify_revert_plan=true" } else { "revert-plan-invalid" },
+        "pass": !f_valid,
+    });
+    println!("  8.12 8.12f: expected=revert-plan-invalid got={} -> {}",
+        if f_valid { "verify_revert_plan=true" } else { "revert-plan-invalid" },
+        if !f_valid { "pass" } else { "FAIL" });
+
+    // 8.12d: the supervisor probe (Windows only — the supervisor never
+    // runs on this platform; the slice itself is a Windows run). If the
+    // supervisor never started, fail fast instead of waiting out the
+    // 120 s + 60 s quiescence for a result that can never arrive.
+    let d_outcome = if !cfg!(windows) {
+        ProbeOutcome {
+            record: json!({
+                "status": "probe-skipped-non-windows",
+                "reason": "the supervisor never runs on this platform; the slice is a Windows run",
+                "exec_started_seen": false, "waited_ms": 0,
+                "product_state_after": product_state_before,
+                "revert": {"ran": false, "result": Value::Null}, "stop_resumed": false,
+            }),
+            pass: false,
+            unsettled: false,
+        }
+    } else if !supervisor_started {
+        ProbeOutcome {
+            record: json!({
+                "status": "supervisor-not-started",
+                "reason": "hand.heartbeat never appeared within 60 s of spawning the supervisor",
+                "exec_started_seen": false, "waited_ms": 0,
+                "product_state_after": product_state_before,
+                "revert": {"ran": false, "result": Value::Null}, "stop_resumed": false,
+            }),
+            pass: false,
+            unsettled: false,
+        }
+    } else {
+        probe_8_12d(inputs, data_dir, ctl)
+    };
+    if d_outcome.unsettled {
+        // §45.1 step 4: NO hand-slice.json, NO hand.supervisor-exit,
+        // supervisor left alive, exit(1) directly.
+        println!("  8.12d: probe-timeout-unsettled — exiting 1 directly, no hand-slice.json");
+        return (1, None);
+    }
+
+    let e_pass = e1["pass"].as_bool().unwrap_or(false)
+        && e2["pass"].as_bool().unwrap_or(false)
+        && e3["pass"].as_bool().unwrap_or(false)
+        && e4["pass"].as_bool().unwrap_or(false);
+    let abc_pass = a_case["pass"].as_bool().unwrap_or(false)
+        && b_case["pass"].as_bool().unwrap_or(false)
+        && c_case["pass"].as_bool().unwrap_or(false);
+    let f_pass = f_case["pass"].as_bool().unwrap_or(false);
+    let negatives_pass = e_pass && abc_pass && f_pass && d_outcome.pass;
+
+    let mut hand_slice = json!({
+        "slice_id": inputs.slice_id,
+        "command_id": inputs.command_id,
+        "slice_exit_code": 1,
+        "steps": {},
+        "hand_evidence": {
+            "product_state_before": product_state_before,
+            "product_state_after": Value::Null,
+            "folder_before": folder_before,
+            "folder_after": Value::Null,
+        },
+        "slice_inputs_echo": {
+            "slice_id": inputs.slice_id, "command_id": inputs.command_id,
+            "msi_path": inputs.msi_path, "msi_sha256": inputs.msi_sha256,
+            "msi_size_bytes": inputs.msi_size_bytes,
+            "product_code": inputs.product_code, "upgrade_code": inputs.upgrade_code,
+            "install_dir": inputs.install_dir,
+            "install_location_expected": inputs.install_location_expected,
+            "name_substring": inputs.name_substring, "ttl_secs": inputs.ttl_secs,
+            "dedup_key": Value::Null,
+        },
+        "slice_approval": {
+            "by": "8.12 self-test", "scope": format!("slice-{} only", inputs.command_id),
+            "reason": "test-only install of an S1-verified MSI inside the self-test binary",
+        },
+        "probe_8_12d": d_outcome.record,
+        "probe_8_12e": {
+            "status": "needs_approval", "gate": "class-line-240",
+            "cases": {"e1": e1, "e2": e2, "e3": e3, "e4": e4},
+        },
+        "negative_hash_tests": {"a": a_case, "b": b_case, "c": c_case},
+        "probe_8_12f": f_case,
+    });
+
+    if !negatives_pass {
+        let failure = if !e_pass {
+            "class-gate-untested".to_string()
+        } else if !abc_pass {
+            "hash-gate-untested".to_string()
+        } else if !f_pass {
+            "revert-plan-invalid".to_string()
+        } else {
+            d_outcome
+                .record
+                .get("status")
+                .and_then(|s| s.as_str())
+                .unwrap_or("probe-failed")
+                .to_string()
+        };
+        hand_slice["slice_failure"] = json!(failure);
+        println!("  8.12 install phase FAIL: {}", hand_slice["slice_failure"].as_str().unwrap_or("?"));
+        return (1, Some(hand_slice));
+    }
+
+    // --- Happy path: S2 (queue) + S3 (execute via the supervisor).
+    let mut cmd = build_slice_command(inputs, true, correct.clone(), None);
+    cmd.approved = true;
+    // K3(a): verify_revert_plan AFTER building the slice command and
+    // BEFORE any queue write — failure is revert-plan-invalid (R19).
+    if !verify_revert_plan(&cmd) {
+        hand_slice["slice_failure"] = json!("revert-plan-invalid");
+        println!("  8.12 S2: verify_revert_plan failed -> revert-plan-invalid");
+        return (1, Some(hand_slice));
+    }
+    let s2_ts = utc_now_secs();
+    let s2 = json!({"ts": s2_ts, "dedup_key": cmd.dedup_key.clone(), "ttl_secs": cmd.ttl_secs});
+    hand_slice["slice_inputs_echo"]["dedup_key"] = json!(cmd.dedup_key.clone());
+    let s3_ts = utc_now_secs();
+    let s3_start = Instant::now();
+    let s3: Value;
+    match prepare_execution(&cmd, config, &Guardian::default()) {
+        Err(e) => {
+            // R14: prepare_execution failed for the slice command.
+            s3 = json!({"ts": s3_ts, "result": {"status": "failed", "reason": e}, "duration_ms": s3_start.elapsed().as_millis() as u64, "exec_request_file": Value::Null, "supervisor_rehash": Value::Null});
+            hand_slice["steps"]["s2"] = s2;
+            hand_slice["steps"]["s3"] = s3;
+            hand_slice["slice_failure"] = json!(format!("prepare-failed:{}", hand_slice["steps"]["s3"]["result"]["reason"].as_str().unwrap_or("?")));
+            println!("  8.12 S3: prepare_execution failed");
+            return (1, Some(hand_slice));
+        }
+        Ok(req) => {
+            let exec_request_file = match write_exec_request(data_dir, &req) {
+                Ok(p) => p.to_string_lossy().to_string(),
+                Err(e) => {
+                    s3 = json!({"ts": s3_ts, "result": {"status": "failed", "reason": format!("write-exec-request:{}", e)}, "duration_ms": s3_start.elapsed().as_millis() as u64, "exec_request_file": Value::Null, "supervisor_rehash": Value::Null});
+                    hand_slice["steps"]["s2"] = s2;
+                    hand_slice["steps"]["s3"] = s3;
+                    hand_slice["slice_failure"] = json!("write-exec-request-failed");
+                    println!("  8.12 S3: write_exec_request failed");
+                    return (1, Some(hand_slice));
+                }
+            };
+            // wait_exec_result: 600 s. The result's `status` is read
+            // as TEXT — never via result_state (it maps blocked->failed).
+            match wait_exec_result(data_dir, &cmd.id, Duration::from_secs(600)) {
+                None => {
+                    s3 = json!({"ts": s3_ts, "result": {"status": "failed", "reason": "s3-timeout"}, "duration_ms": s3_start.elapsed().as_millis() as u64, "exec_request_file": exec_request_file, "supervisor_rehash": Value::Null});
+                    hand_slice["steps"]["s2"] = s2;
+                    hand_slice["steps"]["s3"] = s3;
+                    hand_slice["slice_failure"] = json!("s3-timeout");
+                    println!("  8.12 S3: no result in 600 s");
+                    return (1, Some(hand_slice));
+                }
+                Some(result) => {
+                    let status = result.get("status").and_then(|s| s.as_str()).unwrap_or("").to_string();
+                    let rehash = result.get("supervisor_rehash").cloned().unwrap_or(Value::Null);
+                    s3 = json!({
+                        "ts": s3_ts, "result": result,
+                        "duration_ms": s3_start.elapsed().as_millis() as u64,
+                        "exec_request_file": exec_request_file,
+                        "supervisor_rehash": rehash,
+                    });
+                    hand_slice["steps"]["s2"] = s2;
+                    hand_slice["steps"]["s3"] = s3;
+                    if status != "done" {
+                        hand_slice["slice_failure"] = json!(format!("s3-status:{}", status));
+                        println!("  8.12 S3: supervisor status={} (expected done)", status);
+                        return (1, Some(hand_slice));
+                    }
+                    if hand_slice["steps"]["s3"]["supervisor_rehash"].is_null() {
+                        hand_slice["slice_failure"] = json!("supervisor-rehash-missing");
+                        println!("  8.12 S3: supervisor result has no supervisor_rehash");
+                        return (1, Some(hand_slice));
+                    }
+                }
+            }
+        }
+    }
+    let product_state_after = bimo_hand::msi::product_state(&inputs.product_code);
+    let folder_after = Path::new(&inputs.install_dir).exists();
+    hand_slice["hand_evidence"]["product_state_after"] = json!(product_state_after);
+    hand_slice["hand_evidence"]["folder_after"] = json!(folder_after);
+    hand_slice["slice_exit_code"] = json!(0);
+    println!("  8.12 install phase PASS (S2+S3 done; S4/S5/S6 are workflow steps)");
+    (0, Some(hand_slice))
+}
+
+/// Phase `revert` (S7, §31.2 + §42.2 + §45.9.5): rebuild the slice
+/// command, run revert() in a thread with a 600 s join timeout, and
+/// update hand-slice.json (steps.s7 + slice_exit_code). No supervisor
+/// is involved — revert runs in-process. Returns the exit code.
+fn run_slice_revert(inputs: &SliceInputs, data_dir: &Path, out_path: &Path) -> i32 {
+    let raw = match fs::read_to_string(out_path) {
+        Ok(r) => r,
+        Err(e) => {
+            println!("slice revert: cannot read hand-slice.json at {}: {}", out_path.display(), e);
+            return 1;
+        }
+    };
+    let mut hand_slice: Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            println!("slice revert: hand-slice.json is malformed: {}", e);
+            return 1;
+        }
+    };
+    let mut cmd = build_slice_command(inputs, true, Some(SLICE_MSI_SHA256.to_string()), None);
+    cmd.approved = true;
+    if !verify_revert_plan(&cmd) {
+        hand_slice["steps"]["s7"] = json!({"ts": utc_now_secs(), "result": "revert-plan-invalid", "duration_ms": 0});
+        hand_slice["slice_failure"] = json!("revert-plan-invalid");
+        hand_slice["slice_exit_code"] = json!(1);
+        let _ = write_json_file(out_path, &hand_slice);
+        println!("slice revert: verify_revert_plan failed -> revert-plan-invalid");
+        return 1;
+    }
+    let start = Instant::now();
+    let s7_ts = utc_now_secs();
+    match revert_with_timeout(&cmd, data_dir, Duration::from_secs(600)) {
+        None => {
+            hand_slice["steps"]["s7"] = json!({"ts": s7_ts, "result": "timeout", "duration_ms": start.elapsed().as_millis() as u64});
+            hand_slice["slice_failure"] = json!("fail-revert-failed");
+            hand_slice["slice_exit_code"] = json!(1);
+            let _ = write_json_file(out_path, &hand_slice);
+            println!("slice revert: revert() did not return in 600 s -> fail-revert-failed");
+            1
+        }
+        Some(RevertOutcome::Reverted) => {
+            hand_slice["steps"]["s7"] = json!({"ts": s7_ts, "result": "reverted", "duration_ms": start.elapsed().as_millis() as u64});
+            hand_slice["slice_exit_code"] = json!(0);
+            let _ = write_json_file(out_path, &hand_slice);
+            println!("slice revert: reverted in {} ms", start.elapsed().as_millis());
+            0
+        }
+        Some(RevertOutcome::Failed(reason)) => {
+            hand_slice["steps"]["s7"] = json!({"ts": s7_ts, "result": format!("failed:{}", reason), "duration_ms": start.elapsed().as_millis() as u64});
+            hand_slice["slice_failure"] = json!("fail-revert-failed");
+            hand_slice["slice_exit_code"] = json!(1);
+            let _ = write_json_file(out_path, &hand_slice);
+            println!("slice revert: revert failed: {} -> fail-revert-failed", reason);
+            1
+        }
+        Some(RevertOutcome::NotReversible(reason)) => {
+            hand_slice["steps"]["s7"] = json!({"ts": s7_ts, "result": format!("not-reversible:{}", reason), "duration_ms": start.elapsed().as_millis() as u64});
+            hand_slice["slice_failure"] = json!("fail-revert-failed");
+            hand_slice["slice_exit_code"] = json!(1);
+            let _ = write_json_file(out_path, &hand_slice);
+            println!("slice revert: not reversible: {}", reason);
+            1
+        }
+    }
+}
+
+fn spawn_supervisor(supervisor_bin: &Path, data_dir: &Path) -> (Option<Child>, bool) {
+    let mut child: Option<Child> = None;
+    let mut started = false;
+    if cfg!(windows) && supervisor_bin.exists() {
+        match ProcCommand::new(supervisor_bin)
+            .args([
+                "--data-dir",
+                &data_dir.to_string_lossy(),
+                "--heartbeat-secs",
+                "2",
+            ])
+            .spawn()
+        {
+            Ok(c) => {
+                child = Some(c);
+                started = wait_file(&data_dir.join("hand.heartbeat"), Duration::from_secs(60));
+            }
+            Err(e) => eprintln!("self-test: spawn supervisor failed: {}", e),
+        }
+    }
+    (child, started)
+}
+
+fn stop_supervisor(data_dir: &Path, child: Option<Child>) {
+    let _ = fs::write(data_dir.join("hand.supervisor-exit"), "");
+    if let Some(mut child) = child {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) => {
+                    if Instant::now() >= deadline {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(_) => break,
+            }
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mut out_path = PathBuf::from("hand-self-test.json");
     let mut supervisor_bin: Option<PathBuf> = None;
+    let mut slice_mode = false;
+    let mut slice_inputs_path: Option<PathBuf> = None;
+    let mut data_dir_arg: Option<PathBuf> = None;
+    let mut slice_phase = "install".to_string();
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -1215,6 +2227,27 @@ fn main() {
                 i += 1;
                 if i < args.len() {
                     supervisor_bin = Some(PathBuf::from(&args[i]));
+                }
+            }
+            "--slice" => {
+                slice_mode = true;
+            }
+            "--slice-inputs" => {
+                i += 1;
+                if i < args.len() {
+                    slice_inputs_path = Some(PathBuf::from(&args[i]));
+                }
+            }
+            "--data-dir" => {
+                i += 1;
+                if i < args.len() {
+                    data_dir_arg = Some(PathBuf::from(&args[i]));
+                }
+            }
+            "--slice-phase" => {
+                i += 1;
+                if i < args.len() {
+                    slice_phase = args[i].clone();
                 }
             }
             _ => {}
@@ -1232,30 +2265,62 @@ fn main() {
         std::process::id(),
         utc_now_secs()
     ));
-    let data_dir = root.join("data");
+    // --data-dir (§33.3): when given, data_dir is <dir> literally
+    // (the supervisor child gets the same dir); otherwise the old
+    // temp-dir behaviour — no break to the existing proofs.
+    let data_dir = data_dir_arg.unwrap_or_else(|| root.join("data"));
     let work_dir = root.join("work");
     let _ = fs::create_dir_all(&data_dir);
     let _ = fs::create_dir_all(&work_dir);
-    // Spawn the supervisor as a child.
-    let mut supervisor_child: Option<Child> = None;
-    let mut supervisor_started = false;
-    if cfg!(windows) && supervisor_bin.exists() {
-        match ProcCommand::new(&supervisor_bin)
-            .args([
-                "--data-dir",
-                &data_dir.to_string_lossy(),
-                "--heartbeat-secs",
-                "2",
-            ])
-            .spawn()
-        {
-            Ok(child) => {
-                supervisor_child = Some(child);
-                supervisor_started = wait_file(&data_dir.join("hand.heartbeat"), Duration::from_secs(60));
+    // --slice mode (§43.3): never runs proofs 8.1–8.11.
+    if slice_mode {
+        let inputs_path = match slice_inputs_path {
+            Some(p) => p,
+            None => {
+                eprintln!("--slice requires --slice-inputs <path>");
+                std::process::exit(1);
             }
-            Err(e) => eprintln!("self-test: spawn supervisor failed: {}", e),
+        };
+        let inputs = match load_slice_inputs(&inputs_path) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("slice: {}", e);
+                std::process::exit(1);
+            }
+        };
+        if slice_phase == "revert" {
+            // Phase 2 (S7): revert() runs in-process — no supervisor.
+            std::process::exit(run_slice_revert(&inputs, &data_dir, &out_path));
+        }
+        if slice_phase != "install" {
+            eprintln!("--slice-phase must be install or revert, got {}", slice_phase);
+            std::process::exit(1);
+        }
+        // Phase 1: spawn the supervisor, run the negatives + S2+S3,
+        // write hand-slice.json BEFORE stopping the supervisor (§43.3).
+        let (supervisor_child, supervisor_started) = spawn_supervisor(&supervisor_bin, &data_dir);
+        let mut config = HandConfig::default();
+        config.exec_enabled = true; // ONLY the self-test binary passes true.
+        config.data_dir = data_dir.clone();
+        config.heartbeat_secs = 2;
+        let ctl = HandControl::new(&data_dir, 2);
+        let (code, hand_slice) = run_slice_install(&inputs, &config, &data_dir, &work_dir, &ctl, supervisor_started);
+        match hand_slice {
+            Some(hs) => {
+                let _ = write_json_file(&out_path, &hs);
+                stop_supervisor(&data_dir, supervisor_child);
+                std::process::exit(code);
+            }
+            None => {
+                // probe-timeout-unsettled (§45.1 step 4): exit(1)
+                // directly — no hand-slice.json, no
+                // hand.supervisor-exit, supervisor left alive.
+                std::process::exit(1);
+            }
         }
     }
+    // Spawn the supervisor as a child.
+    let (supervisor_child, supervisor_started) = spawn_supervisor(&supervisor_bin, &data_dir);
     let mut config = HandConfig::default();
     config.exec_enabled = true; // ONLY the self-test binary passes true.
     config.data_dir = data_dir.clone();
@@ -1355,24 +2420,7 @@ fn main() {
         println!("  {}: {}", key, proof.get("status").and_then(|v| v.as_str()).unwrap_or("?"));
     }
     // Stop the supervisor, then kill it if it does not exit.
-    let _ = fs::write(data_dir.join("hand.supervisor-exit"), "");
-    if let Some(mut child) = supervisor_child {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            match child.try_wait() {
-                Ok(Some(_)) => break,
-                Ok(None) => {
-                    if Instant::now() >= deadline {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-                Err(_) => break,
-            }
-        }
-    }
+    stop_supervisor(&data_dir, supervisor_child);
     if verdict == "pass" {
         std::process::exit(0);
     } else {

@@ -387,10 +387,59 @@ fn handle_msi_request(req: &ExecRequest, ctl: &HandControl, data_dir: &Path, sta
     let msi_path = req.args.iter().find(|a| a.to_ascii_lowercase().ends_with(".msi")).cloned().unwrap_or_default();
     let name_substring = req.name_substring.clone().unwrap_or_default();
     let target_dir = req.install_dir.clone().unwrap_or_default();
+    let result_path = exec_result_path(data_dir, &req.id);
+    // Rehash gate (§25.2, §33.2, §43.3): BEFORE the install thread is
+    // launched — this is what closes the IPC jump (hash -> request file
+    // -> supervisor -> launch). Absent field => blocked/sha256-required;
+    // unreadable file => blocked/sha256-unreadable; mismatch =>
+    // blocked/sha256-mismatch. match := (computed == expected);
+    // computed null => match false (§45 K5(b/c)). No launch on any
+    // blocked outcome.
+    let (rehash_computed, rehash_match) = match &req.expected_sha256 {
+        None => {
+            let _ = write_json_file(&result_path, &json!({
+                "id": req.id, "status": "blocked", "reason": "sha256-required",
+                "supervisor_rehash": {"computed_sha256": Value::Null, "match": false},
+                "duration_ms": started_at.elapsed().as_millis() as u64,
+            }));
+            return false;
+        }
+        Some(expected) => {
+            match bimo_hand::file_sha256(Path::new(&msi_path)) {
+                Err(_) => {
+                    let _ = write_json_file(&result_path, &json!({
+                        "id": req.id, "status": "blocked", "reason": "sha256-unreadable",
+                        "supervisor_rehash": {"computed_sha256": Value::Null, "match": false},
+                        "duration_ms": started_at.elapsed().as_millis() as u64,
+                    }));
+                    return false;
+                }
+                Ok(computed) => {
+                    let m = computed == expected.trim().to_lowercase();
+                    if !m {
+                        let _ = write_json_file(&result_path, &json!({
+                            "id": req.id, "status": "blocked", "reason": "sha256-mismatch",
+                            "supervisor_rehash": {"computed_sha256": computed, "match": false},
+                            "duration_ms": started_at.elapsed().as_millis() as u64,
+                        }));
+                        return false;
+                    }
+                    (computed, true)
+                }
+            }
+        }
+    };
+    let rehash_json = json!({"computed_sha256": rehash_computed, "match": rehash_match});
+    // TARGETDIR (§28.2 (a)): the MSI path never runs msiexec.exe, so
+    // the property travels in the MsiInstallProduct command line, not
+    // in ExecRequest.args (those are documentation on this path).
+    let cmdline = match &req.targetdir {
+        Some(td) => format!("REBOOT=ReallySuppress TARGETDIR={}", td),
+        None => "REBOOT=ReallySuppress".to_string(),
+    };
     let pre_state = bimo_hand::msi::pre_command_state(req.product_code.as_deref(), &target_dir);
     let pre_msiexec: Vec<u32> = bimo_hand::win32::msiexec_processes().iter().map(|p| p.pid).collect();
-    let (cancel, outcome_slot) = sup::run_msi_install_in_thread(msi_path.clone());
-    let result_path = exec_result_path(data_dir, &req.id);
+    let (cancel, outcome_slot) = sup::run_msi_install_in_thread_cmdline(msi_path.clone(), cmdline);
     loop {
         if ctl.stop_present() {
             let reason = ctl.stop_reason().unwrap_or_else(|| "hand.stop".to_string());
@@ -412,6 +461,7 @@ fn handle_msi_request(req: &ExecRequest, ctl: &HandControl, data_dir: &Path, sta
                 "remaining_pids": outcome.remaining_pids, "handles_released": outcome.handles_released,
                 "return_code": outcome.return_code, "forced_ms": outcome.forced_ms,
                 "abort": outcome.to_json(), "pre_command_state": pre_state,
+                "supervisor_rehash": rehash_json,
                 "duration_ms": started_at.elapsed().as_millis() as u64,
             }));
             return false;
@@ -436,6 +486,7 @@ fn handle_msi_request(req: &ExecRequest, ctl: &HandControl, data_dir: &Path, sta
                 "remaining_pids": outcome.remaining_pids, "handles_released": outcome.handles_released,
                 "return_code": outcome.return_code, "forced_ms": outcome.forced_ms,
                 "abort": outcome.to_json(), "pre_command_state": pre_state,
+                "supervisor_rehash": rehash_json,
                 "duration_ms": started_at.elapsed().as_millis() as u64,
             }));
             return false;
@@ -452,6 +503,7 @@ fn handle_msi_request(req: &ExecRequest, ctl: &HandControl, data_dir: &Path, sta
                 "id": req.id, "status": status, "return_code": o.return_code,
                 "cancel_ms": o.cancel_ms, "handler_calls": o.handler_calls,
                 "pre_command_state": pre_state,
+                "supervisor_rehash": rehash_json,
                 "duration_ms": started_at.elapsed().as_millis() as u64,
             }));
             return false;

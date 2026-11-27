@@ -9,7 +9,14 @@
 //! `ExecRequest` for the supervisor (which alone launches processes, in
 //! the job) or an error naming the reason: `exec_disabled`,
 //! `deadman_active`, `expired`, `needs_approval`, `disk-space`,
-//! `blocked_eicar`, `guardian_unavailable`, `already_done`.
+//! `blocked_eicar`, `guardian_unavailable`, `already_done`,
+//! `sha256-required`, `sha256-mismatch`, `sha256-unreadable`.
+//!
+//! Gate order (the 8.12 negative tests prove it): exec flag, deadman,
+//! TTL, approval/organize (line 213), disk space, guardian (line 236),
+//! MSI class (line 240), then the file-hash gate (§25.2, §39.3 —
+//! inserted AFTER the class gate, so an unapproved command fails at
+//! the class gate before any hash is computed).
 //!
 //! Disk-space rule (checked before execution and re-checked at start):
 //! free bytes must be >= size + max(512 MB, 10% of size), else the command
@@ -79,6 +86,17 @@ pub struct ExecRequest {
     pub product_code: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name_substring: Option<String>,
+    /// Expected SHA-256 (lowercase hex) of the MSI file (§25.2).
+    /// `Option` structurally so old request files still deserialize;
+    /// semantically REQUIRED for install commands (§25.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_sha256: Option<String>,
+    /// Custom install root for the slice (§28.2 ruling (a)): when set,
+    /// the supervisor passes `TARGETDIR=<this>` to the installer and the
+    /// msiexec argument line carries it too. Set only when the command
+    /// opts in with `args.targetdir == true`; `None` = MSI default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub targetdir: Option<String>,
 }
 
 pub fn exec_request_path(data_dir: &Path, id: &str) -> PathBuf {
@@ -240,6 +258,36 @@ pub fn prepare_execution(
     if cmd.kind == "install" && cmd.args.get("msi").is_some() && !cmd.approved && !msi_class_allowed(cmd) {
         return Err("needs_approval".to_string());
     }
+    // File-hash gate (§25.2, §39.3): AFTER the class gate, so 8.12e
+    // (unapproved) fails at line 240 before any hash is computed.
+    // Applies to installs only, never to uninstalls (no hash to check
+    // for a removal). Absent field => sha256-required; present but
+    // empty/malformed (not 64 hex chars) => sha256-mismatch (§45.9.5);
+    // unreadable file => sha256-unreadable. No request file is written
+    // on any of these failures.
+    if cmd.kind == "install" && !cmd.args.get("uninstall").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if let Some(msi) = cmd.args.get("msi").and_then(|v| v.as_str()) {
+            match cmd.args.get("expected_sha256").and_then(|v| v.as_str()) {
+                None => return Err("sha256-required".to_string()),
+                Some(expected) => {
+                    let expected = expected.trim().to_lowercase();
+                    let well_formed = expected.len() == 64
+                        && expected.chars().all(|c| c.is_ascii_hexdigit());
+                    if !well_formed {
+                        return Err("sha256-mismatch".to_string());
+                    }
+                    match crate::file_sha256(Path::new(msi)) {
+                        Ok(computed) => {
+                            if computed != expected {
+                                return Err("sha256-mismatch".to_string());
+                            }
+                        }
+                        Err(_) => return Err("sha256-unreadable".to_string()),
+                    }
+                }
+            }
+        }
+    }
     // Idempotency: the result already exists — done, without executing.
     if let Some(marker) = cmd.args.get("idempotency_path").and_then(|v| v.as_str()) {
         if Path::new(marker).exists() {
@@ -259,16 +307,29 @@ pub fn prepare_execution(
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             let verb = if uninstall { "/x" } else { "/i" };
+            // Slice opt-in (§28.2 (a)): TARGETDIR is appended ONLY when
+            // the command sets args.targetdir=true. Never by default:
+            // 8.1's VLC command carries install_dir too, and silently
+            // redirecting it would change a proven proof.
+            let targetdir = if cmd.args.get("targetdir").and_then(|v| v.as_bool()).unwrap_or(false) {
+                cmd.args.get("install_dir").and_then(|v| v.as_str()).map(|s| s.to_string())
+            } else {
+                None
+            };
+            let mut install_args = vec![
+                verb.to_string(),
+                msi.to_string(),
+                "/qn".to_string(),
+                "/norestart".to_string(),
+            ];
+            if let Some(td) = &targetdir {
+                install_args.push(format!("TARGETDIR={}", td));
+            }
             ExecRequest {
                 id: cmd.id.clone(),
                 kind: "install".to_string(),
                 program: "msiexec.exe".to_string(),
-                args: vec![
-                    verb.to_string(),
-                    msi.to_string(),
-                    "/qn".to_string(),
-                    "/norestart".to_string(),
-                ],
+                args: install_args,
                 working_dir: None,
                 cleanup_path: None,
                 install_dir: cmd
@@ -280,6 +341,8 @@ pub fn prepare_execution(
                 installer_kind: if uninstall { None } else { Some("msi".to_string()) },
                 product_code: cmd.args.get("product_code").and_then(|v| v.as_str()).map(|s| s.to_string()),
                 name_substring: cmd.args.get("name_substring").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                expected_sha256: cmd.args.get("expected_sha256").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                targetdir,
             }
         }
         "transfer" => {
@@ -313,6 +376,8 @@ pub fn prepare_execution(
                 installer_kind: None,
                 product_code: None,
                 name_substring: None,
+                expected_sha256: None,
+                targetdir: None,
             }
         }
         "probe-grandchild" => ExecRequest {
@@ -331,6 +396,8 @@ pub fn prepare_execution(
             installer_kind: None,
             product_code: None,
             name_substring: None,
+            expected_sha256: None,
+            targetdir: None,
         },
         other => return Err(format!("exec_not_live:{}", other)),
     };

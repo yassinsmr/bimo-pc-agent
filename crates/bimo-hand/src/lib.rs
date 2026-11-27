@@ -253,6 +253,13 @@ pub mod kill {
     }
 
     #[derive(Debug, Clone)]
+    pub struct OrphanKillAttempt {
+        pub pid: u32,
+        pub ok: bool,
+        pub last_error: u32,
+    }
+
+    #[derive(Debug, Clone)]
     pub struct AbortOutcome {
         pub status: String,
         pub trigger: String,
@@ -273,6 +280,15 @@ pub mod kill {
         pub leftovers_empty: Option<bool>,
         pub stop_unconfirmed: bool,
         pub ui_calls: u64,
+        // Stub drift fix (cycle 55): these fields exist on the real
+        // Windows AbortOutcome (kill.rs) and bin code reads them, so
+        // the stub must carry them too — otherwise the bins do not
+        // compile on Linux at all. Values are always the zero default.
+        pub handler_first_ms: u64,
+        pub internal_ui_prev: u32,
+        pub external_ui_prev_non_null: bool,
+        pub orphans_enumerated: usize,
+        pub orphan_kill_attempts: Vec<OrphanKillAttempt>,
         pub note: String,
         pub cancel_depth: Value,
     }
@@ -299,6 +315,11 @@ pub mod kill {
                 "leftovers_empty": self.leftovers_empty,
                 "stop_unconfirmed": self.stop_unconfirmed,
                 "ui_calls": self.ui_calls,
+                "handler_first_ms": self.handler_first_ms,
+                "internal_ui_prev": self.internal_ui_prev,
+                "external_ui_prev_non_null": self.external_ui_prev_non_null,
+                "orphans_enumerated": self.orphans_enumerated,
+                "orphan_kill_attempts": self.orphan_kill_attempts.iter().map(|a| json!({"pid": a.pid, "ok": a.ok, "last_error": a.last_error})).collect::<Vec<_>>(),
                 "note": self.note,
                 "cancel_depth": self.cancel_depth,
             })
@@ -331,6 +352,11 @@ pub mod kill {
             leftovers_empty: None,
             stop_unconfirmed: false,
             ui_calls: 0,
+            handler_first_ms: 0,
+            internal_ui_prev: 0,
+            external_ui_prev_non_null: false,
+            orphans_enumerated: 0,
+            orphan_kill_attempts: Vec::new(),
             note: "abort() is windows-only; this stub never kills anything".to_string(),
             cancel_depth: json!({"last_action": null, "reached_register_product": false, "handler_calls_at_cancel": 0}),
         }
@@ -352,6 +378,12 @@ pub mod msi {
         pub cancel_ms: u64,
         pub total_ms: u64,
         pub handler_calls: u64,
+        // Stub drift fix (cycle 55): same three fields as the real
+        // Windows CancelOutcome (msi.rs) — bin/supervisor.rs reads
+        // them, so the stub must carry them.
+        pub handler_first_ms: u64,
+        pub internal_ui_prev: u32,
+        pub external_ui_prev_non_null: bool,
         pub cancelled: bool,
     }
 
@@ -361,6 +393,9 @@ pub mod msi {
             cancel_ms: 0,
             total_ms: 0,
             handler_calls: 0,
+            handler_first_ms: 0,
+            internal_ui_prev: 0,
+            external_ui_prev_non_null: false,
             cancelled: false,
         }
     }
@@ -372,6 +407,11 @@ pub mod msi {
 
     pub fn install_with_external_cancel(msi_path: &str, cancel: Arc<AtomicBool>) -> CancelOutcome {
         let _ = (msi_path, cancel);
+        failed_outcome()
+    }
+
+    pub fn install_with_external_cancel_cmdline(msi_path: &str, cmdline: &str, cancel: Arc<AtomicBool>) -> CancelOutcome {
+        let _ = (msi_path, cmdline, cancel);
         failed_outcome()
     }
 
@@ -511,6 +551,12 @@ pub mod win32 {
     }
 
     pub fn is_elevated() -> bool {
+        false
+    }
+
+    /// Stub (cycle 55): the real win32.rs enables SeDebugPrivilege;
+    /// on other platforms there is no such privilege to enable.
+    pub fn enable_debug_privilege() -> bool {
         false
     }
 

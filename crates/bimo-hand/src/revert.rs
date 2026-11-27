@@ -40,6 +40,9 @@ pub fn verify_revert_plan(cmd: &Command) -> bool {
         "install" => {
             plan.get("winget_id").and_then(|v| v.as_str()).is_some()
                 || plan.get("uninstaller").and_then(|v| v.as_str()).is_some()
+                // §42.1 (C4(a)): a measured product_code is a valid
+                // revert plan for an install command.
+                || plan.get("product_code").and_then(|v| v.as_str()).is_some()
         }
         "organize" => match plan.get("moves").and_then(|v| v.as_array()) {
             Some(moves) => moves.iter().all(|m| {
@@ -154,8 +157,47 @@ fn revert_transfer(cmd: &Command) -> RevertOutcome {
 }
 
 fn revert_install(cmd: &Command) -> RevertOutcome {
-    // A simulated broken uninstall record (the 8.3 proof) is an explicit
-    // marker in the command arguments.
+    // (1) Slice path (§31.2 as corrected by §45.2): a measured
+    // product_code uninstalls through the SINGLE mechanism
+    // ensure_product_absent — which re-calls uninstall_product every
+    // iteration inside its own 60 s loop. No second wait loop here, no
+    // direct uninstall_product call from 8.12 (option (b) stays rejected).
+    // A single stuck MsiConfigureProductW call can exceed the 60 s
+    // inner wait; the OUTER 600 s bound is enforced by the caller
+    // (8.12 runs revert() in a thread + join timeout, §45.9.5), not here.
+    let product_code = cmd
+        .args
+        .get("product_code")
+        .and_then(|v| v.as_str())
+        .or_else(|| cmd.revert_plan.get("product_code").and_then(|v| v.as_str()));
+    if let Some(code) = product_code {
+        let name_substring = cmd
+            .args
+            .get("name_substring")
+            .and_then(|v| v.as_str())
+            .or_else(|| cmd.revert_plan.get("name_substring").and_then(|v| v.as_str()))
+            .unwrap_or("");
+        let v = crate::msi::ensure_product_absent(Some(code), name_substring, 60_000);
+        let absent = v
+            .get("product_absent")
+            .and_then(|x| x.as_bool())
+            .unwrap_or(false);
+        if absent {
+            return RevertOutcome::Reverted;
+        }
+        return match v.get("uninstall_return_code").and_then(|x| x.as_u64()) {
+            Some(1618) => RevertOutcome::Failed("msi-busy".to_string()),
+            // §45.9.5: uninstall claimed success (rc 0) yet the product
+            // is still present — a contradiction with its own name.
+            Some(0) => RevertOutcome::Failed("msi-still-present".to_string()),
+            Some(rc) => RevertOutcome::Failed(format!("msi-uninstall-failed:{}", rc)),
+            // Defensive branch: the current code always sets a code when
+            // the product was found; null means the value is missing.
+            None => RevertOutcome::Failed("msi-unknown".to_string()),
+        };
+    }
+    // (2) A simulated broken uninstall record (the 8.3 proof) is an explicit
+    // marker in the command arguments — preserved verbatim.
     if cmd
         .args
         .get("uninstaller_missing")
