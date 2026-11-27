@@ -32,8 +32,19 @@
 
 name: windows-hand-thin-slice-run
 
+# TEMPORARY (cycle 55): `push` exists ONLY because GitHub's web UI
+# lists workflows from the default branch only, and this file lives
+# on hand-thin-slice-c50 — so workflow_dispatch cannot be clicked
+# from the UI and no API token exists on this machine (gh is not
+# logged in; the GitHub connector returns 403). The push trigger
+# fires exactly once, on the commit that adds it; it is removed in a
+# follow-up commit after the slice run finishes (a push whose
+# workflow file has no `push` trigger starts no run). Do NOT keep it.
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/windows-hand-thin-slice-run.yml
 
 permissions:
   contents: write
