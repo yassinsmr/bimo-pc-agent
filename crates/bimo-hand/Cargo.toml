@@ -1,0 +1,42 @@
+[package]
+name = "bimo-hand"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "BIMO hand: supervised, fail-closed execution (stop / revert / supervisor) — Unit 3 Part 4"
+
+[lib]
+name = "bimo_hand"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bimo-hand-self-test"
+path = "src/bin/self_test.rs"
+
+[[bin]]
+name = "bimo-hand-supervisor"
+path = "src/bin/supervisor.rs"
+
+[dependencies]
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_Console",
+  "Win32_Security_Cryptography",
+  "Win32_Security",
+  "Win32_Storage_FileSystem",
+  "Win32_System_SystemInformation",
+    # v2 (cycle 41): windows 0.62 features for the kill model. Note: there
+    # is no Win32_System_Installer feature in windows 0.62.2 (verified by
+    # cargo resolution); the MSI APIs are therefore called via raw
+    # extern "system" in msi.rs, exactly as in the kill spike.
+    "Win32_System_Com",
+    "Win32_UI_WindowsAndMessaging",
+] }
