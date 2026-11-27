@@ -433,8 +433,15 @@ fn handle_msi_request(req: &ExecRequest, ctl: &HandControl, data_dir: &Path, sta
     // TARGETDIR (§28.2 (a)): the MSI path never runs msiexec.exe, so
     // the property travels in the MsiInstallProduct command line, not
     // in ExecRequest.args (those are documentation on this path).
+    // Cycle 65, council 22 E2: INSTALLFOLDER travels in the same
+    // command line. Diagnostic run 7 proved TARGETDIR reaches the
+    // MSI log yet does NOT redirect this MSI (INSTALLFOLDER is rooted
+    // in ProgramFiles64Folder, so the resolver ignores TARGETDIR);
+    // for the slice td is C:\bimo-slice\Notepad++, so the literal
+    // line is INSTALLFOLDER=C:\bimo-slice\Notepad++. TARGETDIR stays
+    // exactly as before.
     let cmdline = match &req.targetdir {
-        Some(td) => format!("REBOOT=ReallySuppress TARGETDIR={}", td),
+        Some(td) => format!("REBOOT=ReallySuppress TARGETDIR={} INSTALLFOLDER={}", td, td),
         None => "REBOOT=ReallySuppress".to_string(),
     };
     let pre_state = bimo_hand::msi::pre_command_state(req.product_code.as_deref(), &target_dir);

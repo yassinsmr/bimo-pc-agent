@@ -168,7 +168,8 @@ pub const INSTALLLOGATTRIBUTES_FLUSHEACHLINE: u32 = 0x2;
 /// Enable the verbose MSI log for installs performed by THIS process
 /// (cycle 64, council 21 D1(3) — capture-only). MsiEnableLog does NOT
 /// change the install invocation: MsiInstallProductW and its command
-/// line (REBOOT=ReallySuppress TARGETDIR=...) stay byte-identical; it
+/// line (REBOOT=ReallySuppress TARGETDIR=... INSTALLFOLDER=... since
+/// cycle 65, council 22 E2) stay byte-identical; it
 /// only records the installer's own log to `log_path`. Returns the MSI
 /// return code (0 = logging enabled). The log file is written by the
 /// installer engine as the install runs; the caller copies it out
@@ -370,7 +371,9 @@ pub fn install_product(msi_path: &str) -> u32 {
 /// until MsiInstallProductW returns (the `forced_ms` of the abort outcome).
 /// `cmdline` is the installer command line (public properties): the
 /// default is "REBOOT=ReallySuppress"; the slice passes
-/// "REBOOT=ReallySuppress TARGETDIR=<custom dir>" (§28.2 (a)) so the
+/// "REBOOT=ReallySuppress TARGETDIR=<custom dir> INSTALLFOLDER=<custom
+/// dir>" (§28.2 (a) + cycle 65, council 22 E2 — diagnostic run 7
+/// proved TARGETDIR alone does not redirect this MSI) so the
 /// installer roots the install under the watched parent instead of the
 /// MSI default. NOTE: the msiexec.exe argument line is NEVER used on
 /// this path — the install goes through the API, so TARGETDIR must
