@@ -1,0 +1,602 @@
+# Eye diagnostic S4 (council 23, cycle 66) — WHERE does the eye go blind?
+#
+# Council 23 verdict: (a) MODIFIED — one diagnostic run (eye alone, NO
+# MSI) with three discriminating axes + raw logging FIRST, then council
+# 24 decides the fix from the NAMED signature. NO slice run 9 before
+# council 24 (D5). (j2) is NOT a candidate in council 24 unless the
+# diagnostic proves the custom folder itself is the problem (excluded:
+# the S0c probe was seen in it).
+#
+# The fact (slice run 8, 46069996927): the eye lived (16.1 s, exit 0)
+# and saw the S0c probe (seq 147-149), then saw ZERO file events for
+# the 229-file install burst while window events continued. Hypotheses:
+# (h1) notify buffer overflow during the burst — ReadDirectoryChangesW
+# drops events on overflow; (h2) 2 s debounce merge swallows the burst
+# and never re-emits; (h3) msiserver (SYSTEM) writes do not generate the
+# same notifications for a user-session watcher; (h4) the watcher
+# silently stopped delivering after the probe.
+#
+# SOURCE FINDING (cycle 66, read from notify 7.0.0 windows.rs — the
+# crate the eye uses): the Windows backend NEVER emits an overflow
+# error. `handle_event` only special-cases ERROR_OPERATION_ABORTED and
+# otherwise parses the 16 KiB buffer (BUF_SIZE = 16384) as if it held
+# valid entries, emitting NOTHING on overflow. So a buffer overflow is
+# SILENT by construction, and the eye CANNOT emit a flood signal for
+# it — the debouncer-full error path (watch.rs: Err -> eye.warning)
+# is dead code for overflow on Windows. Flood evidence in THIS run is
+# therefore COVERAGE: the raw tap records exactly which expected files
+# it saw, and missing files ARE the flood signature. The raw tap also
+# records any `raw.flood` line if notify ever delivers one — which
+# would contradict this reading and must be reported, not hidden.
+#
+# Binding conditions D1–D5 (council 23):
+# - D1 — three discriminating axes + raw log: (A) controlled burst
+#   (250 files in ~2 s, user session, .NET writes); (B) slow drip
+#   (10 files, 3 s apart — slower than the 2 s debounce window);
+#   (C) SYSTEM-writer axis (a burst written by SYSTEM via a scheduled
+#   task, identity proven by the marker file — tests h3 DIRECTLY);
+#   plus a separate raw log (eye-raw-events.jsonl: every raw notify
+#   event + flood lines + shadow debounce decisions + a file-path
+#   heartbeat independent of the eye's general heartbeat).
+# - D2 — logging FIRST, absence itself a finding: the raw tap is built
+#   into the eye (crates/bimo-eye/src/rawtap.rs) and its presence is
+#   verified (tap-started line + heartbeats) BEFORE any signature is
+#   judged. If the raw log is absent, the verdict is
+#   `diagnosed-raw-tap-absent` (inconclusive-by-design), never a guess.
+#   A run with full raw coverage and ZERO flood lines records "no
+#   flood signal; raw coverage complete" — that excludes h1 for the
+#   axis, it does not hide the flood question.
+# - D3 — NO modification of the monitor before the signature: the
+#   notify store, the debounce and the re-arming are UNTOUCHED. The
+#   raw tap is a second, independent watcher on the same folders; it
+#   never sends to the eye channel. One fix per signature, after
+#   council 24.
+# - D4 — no demoting the witness, no replacing with polling in this
+#   cycle.
+# - D5 — a negative result is EXCLUSION, not acquittal; no slice run 9
+#   before council 24; (j2) is not a candidate in council 24 unless
+#   the diagnostic proves the custom folder itself is the problem.
+#
+# Decision tree (thresholds: burst axes 250 files — "blind" is
+# <50% = 125, "seen" is >=95% = 238; drip axis 10 files — "missed"
+# is eye <5 with raw >=9). Priority order; the full per-axis table
+# is in the verdict JSON whatever the headline says:
+#   1. diagnosed-never-armed / diagnosed-log-encrypted /
+#      diagnosed-raw-tap-absent / diagnosed-eye-died-inside-live-step
+#      (moot cases first — the run cannot answer the question)
+#   2. diagnosed-s4-drip-missed — the pipeline is broken even at low
+#      rate (h2/h4 family); the burst question is moot
+#   3. diagnosed-s4-burst-blind-raw-blind — raw saw <50% too: the
+#      loss is at/below notify (h1 silent overflow SUPPORTED by the
+#      missing files themselves)
+#   4. diagnosed-s4-burst-blind-raw-saw — raw saw >=50% but the eye
+#      saw <50%: the loss is in the debounced pipeline (h2, or the
+#      eye's send path); h1 excluded at the raw level for this axis
+#   5. diagnosed-s4-system-axis-failed — the SYSTEM task itself could
+#      not run (harness failure, not an eye finding); A/B still stand
+#   6. diagnosed-s4-system-blind-raw-blind — the SYSTEM burst is
+#      invisible even to the raw tap: h3 SUPPORTED (session-level
+#      invisibility of SYSTEM writes)
+#   7. diagnosed-s4-system-blind-debouncer — raw saw the SYSTEM burst
+#      but the eye did not: pipeline-level loss regardless of writer
+#      (h3 as session-invisibility EXCLUDED)
+#   8. diagnosed-s4-burst-seen — the eye saw >=95% of BOTH bursts:
+#      the blindness did NOT reproduce (D5 exclusion, not acquittal)
+#   9. diagnosed-s4-mixed — none of the above; the table decides
+#
+# Timeout ceiling: 20 min. Worst case — build ~2 min + arm 30 s +
+# idle 15 s + axis A ~10 s + axis B ~35 s + axis C ~100 s (task +
+# 90 s poll) + stop/control ~25 s + publish ~1 min ≈ 7 min. Margin
+# ~13 min.
+#
+# M5 tag (carried): any result "does not prove eye survival outside a
+# live step nor device performance". BIMO_EYE_PLAINTEXT_OK inside the
+# live step only, never job/machine scope, never on the Legion path.
+#
+# Standing rule: the TEMPORARY push trigger is removed immediately
+# after this run fires (one push only). The spike workflow gets NO
+# trigger ever. workflow_dispatch is kept so the workflow stays
+# triggerable if it ever reaches main.
+name: windows-eye-diagnostic-s4
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [hand-thin-slice-c50]
+
+permissions:
+  contents: write
+
+env:
+  WATCH_PARENT: 'C:\bimo-slice'
+
+jobs:
+  diagnose-s4:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: hand-thin-slice-c50
+
+      - name: Install Rust (stable + MSVC target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build eye for Windows
+        run: |
+          cargo build --release --target x86_64-pc-windows-msvc --locked -p bimo-eye
+
+      - name: D0 precheck (diag dir + watched parent)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $diagId = "diag-s4-$env:GITHUB_RUN_ID"
+          $diagDir = "$env:RUNNER_TEMP\bimo-diag-$diagId"
+          $eyeData = "$diagDir\eye-data"
+          "DIAG_ID=$diagId" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "DIAG_DIR=$diagDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "EYE_DATA=$eyeData" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          New-Item -ItemType Directory -Force -Path $eyeData | Out-Null
+          # Same watched parent as the failing slice runs, so the result
+          # is comparable: the ONLY difference is the three axes.
+          New-Item -ItemType Directory -Force -Path $env:WATCH_PARENT | Out-Null
+          Write-Host "D0 pass: diag dir $diagDir"
+
+      - name: D-LIVE full cycle + three axes inside ONE live step (council 23, D1-D5)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          . $env:GITHUB_WORKSPACE\.github\scripts\spike-log.ps1
+          $stepStartTs = [DateTimeOffset]::UtcNow
+          $eyeProc = $null; $controlProc = $null
+          $eyePid = $null; $controlPid = $null
+          $eyeLaunchTs = $null; $controlLaunchTs = $null
+          $armed = $false; $armTs = $null
+          $phase = @{}
+
+          # --- Axis-count helper (D1/D2): counts, per axis dir, how many
+          # files on disk the RAW tap saw, the SHADOW debounce decided,
+          # and the EYE (debounced log) saw. Reads the raw log with the
+          # same FileShare.ReadWrite open the eye log needs
+          # (spike-log.ps1 sharing rule — the tap holds the file open).
+          function Read-RawLog {
+            param([string]$Path)
+            if (-not (Test-Path $Path)) { return @() }
+            $tries = 0
+            while ($true) {
+              try { $lines = Read-EyeLogLines -Path $Path; break }
+              catch { $tries++; if ($tries -ge 5) { return @() }; Start-Sleep -Milliseconds 200 }
+            }
+            $out = @()
+            foreach ($line in $lines) {
+              if ([string]::IsNullOrWhiteSpace($line)) { continue }
+              try { $out += ($line | ConvertFrom-Json) } catch {}
+            }
+            return $out
+          }
+          function Get-AxisCounts {
+            param([string]$AxisDir, [string]$FilePattern)
+            $onDisk = @(Get-ChildItem -File -Filter $FilePattern $AxisDir -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
+            $eyeEvents = Read-EyeLog -Path "$env:EYE_DATA\eye-events.jsonl"
+            $rawLines = Read-RawLog -Path "$env:EYE_DATA\eye-raw-events.jsonl"
+            $rawSeen = @(); $shadowSeen = @(); $eyeSeen = @()
+            foreach ($f in $onDisk) {
+              if (@($rawLines | Where-Object { $_.type -eq "raw.event" -and $_.paths -contains $f }).Count -ge 1) { $rawSeen += $f }
+              if (@($rawLines | Where-Object { $_.type -eq "shadow.decision" -and $_.path -eq $f }).Count -ge 1) { $shadowSeen += $f }
+              if (@($eyeEvents | Where-Object { $_.path -eq $f -and $_.type -in @("file.created", "file.completed", "install.detected") }).Count -ge 1) { $eyeSeen += $f }
+            }
+            return @{
+              dir = $AxisDir; pattern = $FilePattern
+              on_disk = $onDisk.Count; raw_seen = $rawSeen.Count
+              shadow_decided = $shadowSeen.Count; eye_seen = $eyeSeen.Count
+              raw_missing_count = ($onDisk.Count - $rawSeen.Count)
+              eye_missing_count = ($onDisk.Count - $eyeSeen.Count)
+            }
+          }
+
+          try {
+            # --- Phase 1: arm eye + control (same forms as diagnostic (a)) ---
+            $env:BIMO_EYE_PLAINTEXT_OK = "1"
+            $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
+            $eyeExe = "$env:GITHUB_WORKSPACE\target\x86_64-pc-windows-msvc\release\bimo-eye-self-test.exe"
+            $eyeProc = Start-Process -FilePath $eyeExe -ArgumentList @(
+              "--watch", "--data-dir", $env:EYE_DATA,
+              "--watch-dirs", $env:WATCH_PARENT,
+              "--snapshot-secs", "1", "--heartbeat-secs", "1",
+              "--max-secs", "1800"
+            ) -WindowStyle Hidden -PassThru -RedirectStandardOutput "$env:DIAG_DIR\eye-stdout.log" -RedirectStandardError "$env:DIAG_DIR\eye-stderr.log"
+            $eyePid = $eyeProc.Id
+            $eyeLaunchTs = [DateTimeOffset]::UtcNow
+            $eyePid | Out-File -FilePath "$env:DIAG_DIR\eye-pid.txt" -Encoding utf8
+            $controlProc = Start-Process -FilePath $pwsh -ArgumentList @(
+              "-NoProfile", "-File", "$env:GITHUB_WORKSPACE\.github\scripts\diag-control-pulse.ps1",
+              "-PulseFile", "$env:DIAG_DIR\control-pulse.log", "-Seconds", "40"
+            ) -WindowStyle Hidden -PassThru -RedirectStandardOutput "$env:DIAG_DIR\control-stdout.log" -RedirectStandardError "$env:DIAG_DIR\control-stderr.log"
+            $controlPid = $controlProc.Id
+            $controlLaunchTs = [DateTimeOffset]::UtcNow
+            $controlPid | Out-File -FilePath "$env:DIAG_DIR\control-pid.txt" -Encoding utf8
+            @{ eye_pid = $eyePid; eye_launch_ts = $eyeLaunchTs.ToString("o"); control_pid = $controlPid; control_launch_ts = $controlLaunchTs.ToString("o"); control_mode = "pulse-loop-500ms"; control_pulse_secs = 40; heartbeat_secs = 1; step_start_ts = $stepStartTs.ToString("o") } | ConvertTo-Json | Out-File -FilePath "$env:DIAG_DIR\diag-control.json" -Encoding utf8
+            $deadline = (Get-Date).AddSeconds(30)
+            while ((Get-Date) -lt $deadline) {
+              $hb = "$env:EYE_DATA\heartbeat.json"
+              if (Test-Path $hb) {
+                $ts = (Get-Content $hb -Raw | ConvertFrom-Json).ts
+                $age = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($ts)).TotalSeconds
+                if ($age -lt 10) { $armed = $true; break }
+              }
+              Start-Sleep -Milliseconds 500
+            }
+            $armTs = [DateTimeOffset]::UtcNow
+            $phase.arm = @{ armed = $armed; arm_ts = $armTs.ToString("o"); eye_alive_at_arm = (-not $eyeProc.HasExited); control_alive_at_arm = (-not $controlProc.HasExited) }
+            Write-Host "D-LIVE phase 1 (arm): armed=$armed eye_pid=$eyePid control_pid=$controlPid"
+            # --- Phase 2: idle 15 s + liveness snapshot ---
+            $p2Start = [DateTimeOffset]::UtcNow
+            Start-Sleep -Seconds 15
+            $phase.liveness_15s = Get-Liveness -At "15s" -StepStart $p2Start -EyeProc $eyeProc -ControlProc $controlProc
+            Write-Host "D-LIVE phase 2 (15s): alive=$($phase.liveness_15s.process_alive) control_alive=$($phase.liveness_15s.control_alive) hb_age=$($phase.liveness_15s.heartbeat_age_secs) lines=$($phase.liveness_15s.log_lines)"
+            # --- Phase 3: AXIS A — controlled burst, 250 files, user session ---
+            # .NET writes (not New-Item): a tight loop, so the burst rate
+            # is comparable to the MSI burst (229 files in ~2 s). The
+            # MEASURED duration is the evidence — if the runner cannot
+            # write 250 files in 2 s, the recorded rate says so.
+            $axisA = "$env:WATCH_PARENT\axis-burst-a"
+            New-Item -ItemType Directory -Force -Path $axisA | Out-Null
+            $bytes = [byte[]]::new(1024)
+            $burstStart = [DateTimeOffset]::UtcNow
+            for ($i = 1; $i -le 250; $i++) {
+              $p = "$axisA\burst-a-{0:D4}.bin" -f $i
+              [System.IO.File]::WriteAllBytes($p, $bytes)
+            }
+            $burstEnd = [DateTimeOffset]::UtcNow
+            $burstSecs = ($burstEnd - $burstStart).TotalSeconds
+            Write-Host "AXIS A burst: 250 files in $([Math]::Round($burstSecs, 2)) s ($([Math]::Round(250 / $burstSecs, 1))/s)"
+            Start-Sleep -Seconds 8
+            $axisACounts = Get-AxisCounts -AxisDir $axisA -FilePattern "burst-a-*.bin"
+            $phase.axis_a = @{ dir = $axisA; files = 250; start_ts = $burstStart.ToString("o"); end_ts = $burstEnd.ToString("o"); seconds = [Math]::Round($burstSecs, 3); rate_per_sec = [Math]::Round(250 / $burstSecs, 1); counts = $axisACounts }
+            Write-Host "AXIS A counts: on_disk=$($axisACounts.on_disk) raw_seen=$($axisACounts.raw_seen) shadow=$($axisACounts.shadow_decided) eye_seen=$($axisACounts.eye_seen)"
+            # --- Phase 4: AXIS B — slow drip, 10 files, 3 s apart ---
+            # Slower than the 2 s debounce window: each file should
+            # complete on its own. If the eye misses these, the
+            # pipeline is broken even at low rate (h2/h4 family).
+            $axisB = "$env:WATCH_PARENT\axis-drip-b"
+            New-Item -ItemType Directory -Force -Path $axisB | Out-Null
+            $dripStart = [DateTimeOffset]::UtcNow
+            for ($i = 1; $i -le 10; $i++) {
+              $p = "$axisB\drip-b-{0:D2}.bin" -f $i
+              [System.IO.File]::WriteAllBytes($p, $bytes)
+              if ($i -lt 10) { Start-Sleep -Seconds 3 }
+            }
+            $dripEnd = [DateTimeOffset]::UtcNow
+            Start-Sleep -Seconds 5
+            $axisBCounts = Get-AxisCounts -AxisDir $axisB -FilePattern "drip-b-*.bin"
+            $phase.axis_b = @{ dir = $axisB; files = 10; start_ts = $dripStart.ToString("o"); end_ts = $dripEnd.ToString("o"); seconds = [Math]::Round(($dripEnd - $dripStart).TotalSeconds, 1); counts = $axisBCounts }
+            Write-Host "AXIS B counts: on_disk=$($axisBCounts.on_disk) raw_seen=$($axisBCounts.raw_seen) shadow=$($axisBCounts.shadow_decided) eye_seen=$($axisBCounts.eye_seen)"
+            # --- Phase 5: AXIS C — SYSTEM-writer burst (tests h3 DIRECTLY) ---
+            # A scheduled task running as SYSTEM writes the same 250-file
+            # burst. The marker file proves the writer identity
+            # (NT AUTHORITY\SYSTEM) — without it the axis is void.
+            # /st needs a future time; the task is fired immediately
+            # with /run. Edge: within 2 min of midnight the /st time
+            # rolls to the next day and /create fails — then the axis
+            # reports a harness failure honestly (never a fake burst).
+            $axisC = "$env:WATCH_PARENT\axis-sys-c"
+            New-Item -ItemType Directory -Force -Path $axisC | Out-Null
+            $sysScript = "$env:DIAG_DIR\sys-burst.ps1"
+            $sysScriptContent = @'
+            $axisC = "C:\bimo-slice\axis-sys-c"
+            $bytes = [byte[]]::new(1024)
+            $start = [DateTimeOffset]::UtcNow
+            for ($i = 1; $i -le 250; $i++) {
+                $p = "$axisC\sys-c-{0:D4}.bin" -f $i
+                [System.IO.File]::WriteAllBytes($p, $bytes)
+            }
+            $end = [DateTimeOffset]::UtcNow
+            $who = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+            @{ writer = $who; files = 250; start_ts = $start.ToString("o"); end_ts = $end.ToString("o"); seconds = [Math]::Round(($end - $start).TotalSeconds, 3) } | ConvertTo-Json | Out-File -FilePath "$axisC\sys-done.json" -Encoding utf8
+            '@
+            $sysScriptContent | Out-File -FilePath $sysScript -Encoding utf8
+            $stTime = (Get-Date).AddMinutes(2).ToString("HH:mm")
+            $taskCreate = schtasks /create /tn "BimoSysBurst" /tr "powershell.exe -NoProfile -ExecutionPolicy Bypass -File $sysScript" /sc once /st $stTime /ru SYSTEM /rl HIGHEST /f 2>&1
+            $taskCreateOk = ($LASTEXITCODE -eq 0)
+            $taskRun = $null; $taskRunOk = $false
+            if ($taskCreateOk) {
+              $taskRun = schtasks /run /tn "BimoSysBurst" 2>&1
+              $taskRunOk = ($LASTEXITCODE -eq 0)
+            }
+            $marker = "$axisC\sys-done.json"
+            $sysDone = $null
+            if ($taskRunOk) {
+              $deadline = (Get-Date).AddSeconds(90)
+              while ((Get-Date) -lt $deadline) {
+                if (Test-Path $marker) { $sysDone = Get-Content $marker -Raw | ConvertFrom-Json; break }
+                Start-Sleep -Seconds 2
+              }
+            }
+            schtasks /delete /tn "BimoSysBurst" /f 2>&1 | Out-Null
+            $axisCCounts = $null
+            if ($null -ne $sysDone) {
+              Start-Sleep -Seconds 8
+              $axisCCounts = Get-AxisCounts -AxisDir $axisC -FilePattern "sys-c-*.bin"
+            }
+            $phase.axis_c = @{
+              task_create_ok = $taskCreateOk; task_create_out = "$taskCreate"
+              task_run_ok = $taskRunOk; task_run_out = "$taskRun"
+              marker_found = ($null -ne $sysDone)
+              writer = $(if ($null -ne $sysDone) { $sysDone.writer } else { $null })
+              write_seconds = $(if ($null -ne $sysDone) { $sysDone.seconds } else { $null })
+              counts = $axisCCounts
+            }
+            Write-Host "AXIS C: create=$taskCreateOk run=$taskRunOk marker=$(($null -ne $sysDone)) writer=$(if ($null -ne $sysDone) { $sysDone.writer } else { 'n/a' }) counts=$(if ($null -ne $axisCCounts) { "on_disk=$($axisCCounts.on_disk) raw=$($axisCCounts.raw_seen) shadow=$($axisCCounts.shadow_decided) eye=$($axisCCounts.eye_seen)" } else { 'n/a' })"
+            # --- Phase 6: liveness snapshot before stop ---
+            $p6Start = [DateTimeOffset]::UtcNow
+            $phase.liveness_end = Get-Liveness -At "end" -StepStart $p6Start -EyeProc $eyeProc -ControlProc $controlProc
+            Write-Host "D-LIVE phase 6 (end): alive=$($phase.liveness_end.process_alive) control_alive=$($phase.liveness_end.control_alive) hb_age=$($phase.liveness_end.heartbeat_age_secs) lines=$($phase.liveness_end.log_lines)"
+            # --- Phase 7: stop eye + capture exit code BEFORE step exit ---
+            $p7Start = [DateTimeOffset]::UtcNow
+            $eyeAliveBeforeStop = -not $eyeProc.HasExited
+            $stopRequestedTs = [DateTimeOffset]::UtcNow
+            New-Item -ItemType File -Force -Path "$env:EYE_DATA\eye.stop" | Out-Null
+            $eyeExited = $eyeProc.WaitForExit(15000)
+            $eyeExitCode = $null; $eyeExitTs = $null; $eyeKilledByStop = $false
+            if ($eyeExited) {
+              $eyeExitCode = $eyeProc.ExitCode
+              $eyeExitTs = [DateTimeOffset]::UtcNow
+            } else {
+              try { $eyeProc.Kill() } catch {}
+              $eyeKilledByStop = $true
+              $eyeProc.WaitForExit(5000) | Out-Null
+            }
+            $phase.stop = @{
+              step_start_ts = $p7Start.ToString("o"); stop_requested_ts = $stopRequestedTs.ToString("o")
+              eye_exited_on_stop = $eyeExited; eye_exit_code = $eyeExitCode
+              eye_exit_ts = $(if ($null -ne $eyeExitTs) { $eyeExitTs.ToString("o") } else { $null })
+              eye_killed_by_stop = $eyeKilledByStop
+              eye_has_exited = $eyeProc.HasExited
+              eye_alive_before_stop = $eyeAliveBeforeStop
+            }
+            Write-Host "D-LIVE phase 7 (stop): alive_before_stop=$eyeAliveBeforeStop exited_on_stop=$eyeExited exit_code=$eyeExitCode killed_by_stop=$eyeKilledByStop"
+            # --- Phase 8: control close-out ---
+            $controlExited = $controlProc.WaitForExit(10000)
+            $controlExitCode = $null; $controlExitTs = $null
+            if ($controlExited) {
+              $controlExitCode = $controlProc.ExitCode
+              $controlExitTs = [DateTimeOffset]::UtcNow
+            }
+            $phase.control_closeout = @{
+              control_exited = $controlExited; control_exit_code = $controlExitCode
+              control_exit_ts = $(if ($null -ne $controlExitTs) { $controlExitTs.ToString("o") } else { $null })
+              control_has_exited = $controlProc.HasExited
+            }
+            Write-Host "D-LIVE phase 8 (control): exited=$controlExited exit_code=$controlExitCode"
+          } catch {
+            $phase.step_error = $_.Exception.Message
+            Write-Host "D-LIVE step error: $($_.Exception.Message)"
+          } finally {
+            # --- Phase 9: evidence, still inside the live step ---
+            $p9Start = [DateTimeOffset]::UtcNow
+            $logPath = "$env:EYE_DATA\eye-events.jsonl"
+            $lines = 0; $lastTs = $null; $hasAgentStop = $false
+            $eyeEvents = @()
+            if (Test-Path $logPath) {
+              $raw = Get-Content $logPath -ErrorAction SilentlyContinue
+              $lines = @($raw).Count
+              if ($lines -gt 0) { $lastTs = ($raw[-1] | ConvertFrom-Json -ErrorAction SilentlyContinue).ts }
+              $hasAgentStop = @($raw | Where-Object { $_ -match '"type":"agent.stop"' }).Count -ge 1
+              $eyeEvents = Read-EyeLog -Path $logPath
+            }
+            # Log-encryption check (D2): lines exist but none parse as
+            # JSON with a type field = DPAPI wrappers, plaintext
+            # opt-in regressed.
+            $logEncrypted = $false
+            if ($lines -gt 0 -and $eyeEvents.Count -eq 0) { $logEncrypted = $true }
+            $hbAge = $null; $hbTs = $null
+            $hb = "$env:EYE_DATA\heartbeat.json"
+            if (Test-Path $hb) {
+              $hbTs = (Get-Content $hb -Raw | ConvertFrom-Json).ts
+              $hbAge = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($hbTs)).TotalSeconds
+            }
+            $stderrLines = @()
+            if (Test-Path "$env:DIAG_DIR\eye-stderr.log") { $stderrLines = @(Get-Content "$env:DIAG_DIR\eye-stderr.log" -ErrorAction SilentlyContinue) }
+            $exitTrace = ($stderrLines | Where-Object { $_ -match 'writer_loop exit' }) -join "`n"
+            if ([string]::IsNullOrWhiteSpace($exitTrace)) { $exitTrace = $null }
+            $controlStats = Get-PulseStats -Path "$env:DIAG_DIR\control-pulse.log"
+            # Raw-tap stats (D2 presence check): the tap-started line +
+            # heartbeats prove the tap was alive; flood lines are the
+            # (expected-absent) flood signal.
+            $rawPath = "$env:EYE_DATA\eye-raw-events.jsonl"
+            $rawLines = Read-RawLog -Path $rawPath
+            $rawTap = @{
+              present = (Test-Path $rawPath)
+              lines = $rawLines.Count
+              tap_started = (@($rawLines | Where-Object { $_.type -eq "raw.tap-started" }).Count -ge 1)
+              raw_events = (@($rawLines | Where-Object { $_.type -eq "raw.event" }).Count)
+              flood_lines = (@($rawLines | Where-Object { $_.type -eq "raw.flood" }).Count)
+              flood_texts = @($rawLines | Where-Object { $_.type -eq "raw.flood" } | Select-Object -ExpandProperty error)
+              shadow_decisions = (@($rawLines | Where-Object { $_.type -eq "shadow.decision" }).Count)
+              heartbeats = (@($rawLines | Where-Object { $_.type -eq "raw.heartbeat" }).Count)
+              last_heartbeat_ts = $(try { (@($rawLines | Where-Object { $_.type -eq "raw.heartbeat" })[-1]).ts } catch { $null })
+            }
+            $live = @{
+              diag_id = $env:DIAG_ID; step_start_ts = $stepStartTs.ToString("o"); step_end_ts = $p9Start.ToString("o")
+              armed = $armed; arm_ts = $(if ($null -ne $armTs) { $armTs.ToString("o") } else { $null })
+              eye_pid = $eyePid; eye_launch_ts = $(if ($null -ne $eyeLaunchTs) { $eyeLaunchTs.ToString("o") } else { $null })
+              control_pid = $controlPid; control_launch_ts = $(if ($null -ne $controlLaunchTs) { $controlLaunchTs.ToString("o") } else { $null })
+              phases = $phase
+              raw_tap = $rawTap
+              final = @{
+                log_lines = $lines; last_ts = $lastTs; has_agent_stop = $hasAgentStop
+                log_encrypted = $logEncrypted
+                heartbeat_ts = $hbTs; heartbeat_age_secs = $hbAge
+                writer_exit_trace = $exitTrace; eye_stopped_file = (Test-Path "$env:EYE_DATA\eye.stopped")
+                control_pulse_count = $controlStats.count; control_pulse_max_gap_secs = $controlStats.max_gap_secs
+                control_last_pulse_ts = $controlStats.last_ts
+              }
+            }
+            $live | ConvertTo-Json -Depth 10 | Out-File -FilePath "$env:DIAG_DIR\diag-live-cycle.json" -Encoding utf8
+            Write-Host "D-LIVE done: armed=$armed lines=$lines agent_stop=$hasAgentStop log_encrypted=$logEncrypted eye_exit_code=$($phase.stop.eye_exit_code) control_exit_code=$($phase.control_closeout.control_exit_code) raw_tap_present=$($rawTap.present) raw_heartbeats=$($rawTap.heartbeats) flood_lines=$($rawTap.flood_lines)"
+          }
+
+      - name: D6 Defender note (cheap observation, never fails the run)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $rt = $null
+          try {
+            $st = Get-MpComputerStatus -ErrorAction Stop
+            $rt = $st.RealTimeProtectionEnabled
+          } catch { $rt = "unavailable" }
+          @{ defender_realtime_protection = $rt } | ConvertTo-Json | Out-File -FilePath "$env:DIAG_DIR\diag-defender.json" -Encoding utf8
+          Write-Host "D6: Defender real-time protection = $rt"
+
+      - name: D6b event-log check (fallback evidence, never fails the run)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $live = Get-Content "$env:DIAG_DIR\diag-live-cycle.json" -Raw | ConvertFrom-Json
+          $eyePid = $live.eye_pid
+          $start = [DateTimeOffset]::Parse($live.arm_ts).AddSeconds(-5)
+          $end = [DateTimeOffset]::UtcNow
+          $entries = @()
+          $queried = $true
+          $note = $null
+          try {
+            $evts = Get-WinEvent -FilterHashtable @{ LogName = @('Application', 'System'); StartTime = $start.DateTime; EndTime = $end.DateTime } -MaxEvents 200 -ErrorAction Stop | Where-Object { $_.Message -match 'bimo-eye' -or $_.Message -match "$eyePid" }
+            foreach ($e in @($evts)) {
+              $entries += @{ time = $e.TimeCreated.ToString("o"); log = $e.LogName; id = $e.Id; level = $e.LevelDisplayName; message = ($e.Message -replace "`r`n", " " -replace "`n", " ").Substring(0, [Math]::Min(300, $e.Message.Length)) }
+            }
+          } catch {
+            if ($_.Exception.Message -match 'No events were found') { $note = "no matching events in window" }
+            else { $queried = $false; $note = $_.Exception.Message }
+          }
+          @{ queried = $queried; window_start = $start.ToString("o"); window_end = $end.ToString("o"); count = $entries.Count; entries = $entries; note = $note } | ConvertTo-Json -Depth 5 | Out-File -FilePath "$env:DIAG_DIR\diag-eventlog.json" -Encoding utf8
+          Write-Host "D6b: event log queried=$queried entries=$($entries.Count) note=$note"
+
+      - name: D7 publish (assemble verdict JSON + push to spike-results)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          . $env:GITHUB_WORKSPACE\.github\scripts\spike-log.ps1
+          $live = Get-Content "$env:DIAG_DIR\diag-live-cycle.json" -Raw | ConvertFrom-Json
+          $def = Get-Content "$env:DIAG_DIR\diag-defender.json" -Raw | ConvertFrom-Json
+          $evlog = $null
+          if (Test-Path "$env:DIAG_DIR\diag-eventlog.json") { $evlog = Get-Content "$env:DIAG_DIR\diag-eventlog.json" -Raw | ConvertFrom-Json }
+          $ctl = Get-Content "$env:DIAG_DIR\diag-control.json" -Raw | ConvertFrom-Json
+          $ph = $live.phases
+          $fin = $live.final
+          $rawTap = $live.raw_tap
+          $eyeExitCode = $ph.stop.eye_exit_code
+          $eyeExitedOnStop = $ph.stop.eye_exited_on_stop
+          $eyeKilledByStop = $ph.stop.eye_killed_by_stop
+          $controlExitCode = $ph.control_closeout.control_exit_code
+          $controlExited = $ph.control_closeout.control_exited
+          # Control lifetime: launch -> exit (or last pulse if still
+          # alive at close-out). The loop is 40 s; a lifetime under
+          # 35 s means it died early INSIDE the live step.
+          $controlLifetimeSecs = $null; $controlDiedEarly = $false; $controlSurvived = $false
+          if ($controlExited -and $null -ne $ph.control_closeout.control_exit_ts) {
+            $controlLifetimeSecs = ([DateTimeOffset]::Parse($ph.control_closeout.control_exit_ts) - [DateTimeOffset]::Parse($ctl.control_launch_ts)).TotalSeconds
+            if ($controlLifetimeSecs -lt 35) { $controlDiedEarly = $true } else { $controlSurvived = $true }
+          } elseif (-not $controlExited) {
+            $controlSurvived = $true
+          }
+          $controlLifetimeDisplay = "still alive at close"
+          if ($null -ne $controlLifetimeSecs) { $controlLifetimeDisplay = "$([Math]::Round($controlLifetimeSecs, 1)) s" }
+          # Eye death inside the live step (same rule as diagnostic (a)):
+          # dead at a liveness snapshot, or exited after eye.stop with
+          # NO agent.stop and NO eye.stopped file.
+          $eyeDiedInside = $false; $eyeDeathNote = $null
+          if ($ph.liveness_15s.process_alive -eq $false -or $ph.liveness_end.process_alive -eq $false) {
+            $eyeDiedInside = $true
+            $eyeDeathNote = "eye dead at a liveness snapshot inside the live step (15 s alive: $($ph.liveness_15s.process_alive); end alive: $($ph.liveness_end.process_alive))"
+          } elseif ($fin.has_agent_stop -eq $false -and $eyeKilledByStop -eq $false -and $null -ne $eyeExitCode -and $eyeExitedOnStop) {
+            if (-not $fin.eye_stopped_file) {
+              $eyeDiedInside = $true
+              $eyeDeathNote = "eye exited after eye.stop with exit code $eyeExitCode but NO agent.stop and NO eye.stopped file: death on its own timing inside the live step"
+            }
+          }
+          # Per-axis counts (null-safe: axis C counts are $null when the
+          # SYSTEM task never produced its marker file).
+          $A = $ph.axis_a.counts; $B = $ph.axis_b.counts; $C = $ph.axis_c.counts
+          $eventlogCount = 0
+          if ($null -ne $evlog) { $eventlogCount = $evlog.count }
+          # Signature decision tree (header: thresholds 125/250 burst,
+          # 238/250 seen, drip eye <5 with raw >=9). The full per-axis
+          # table is in the verdict JSON whatever the headline says.
+          $signature = "inconclusive"; $reasons = @()
+          if (-not $live.armed) { $signature = "diagnosed-never-armed"; $reasons += "eye never armed: no fresh heartbeat in 30 s" }
+          elseif ($fin.log_encrypted) { $signature = "diagnosed-log-encrypted"; $reasons += "log lines carry no type field (DPAPI wrappers): plaintext opt-in regressed" }
+          elseif (-not $rawTap.present -or $rawTap.heartbeats -eq 0 -or -not $rawTap.tap_started) { $signature = "diagnosed-raw-tap-absent"; $reasons += "D2 FAILED: the raw tap did not prove itself alive (present: $($rawTap.present); tap-started: $($rawTap.tap_started); heartbeats: $($rawTap.heartbeats)) — the diagnostic cannot name a signature without its logging; council 24 decides with the same question, no new run without it" }
+          elseif ($eyeDiedInside) { $signature = "diagnosed-eye-died-inside-live-step"; $reasons += "$eyeDeathNote; exit code captured from the live step's Process object: $eyeExitCode"; $reasons += "the eye died while its launching step was still alive — the lifecycle finding from diagnostic (a) does NOT replicate on this run"; if ($null -ne $fin.writer_exit_trace) { $reasons += "writer exit trace: $($fin.writer_exit_trace)" } else { $reasons += "no writer_loop exit trace in stderr (same no-trace death as runs 1-4, now inside a live step)" }; if ($controlDiedEarly) { $reasons += "control ALSO died early inside the live step (lifetime $($controlLifetimeDisplay)): the killer strikes children of a live step too" } }
+          elseif ($B.eye_seen -lt 5 -and $B.raw_seen -ge 9) { $signature = "diagnosed-s4-drip-missed"; $reasons += "AXIS B (slow drip, 10 files 3 s apart): eye saw $($B.eye_seen)/10 while raw saw $($B.raw_seen)/10 and shadow decided $($B.shadow_decided)/10 — the pipeline is broken even at low rate (h2/h4 family); the burst question is moot" }
+          elseif ($A.raw_seen -lt 125) { $signature = "diagnosed-s4-burst-blind-raw-blind"; $reasons += "AXIS A (250-file burst, user session, $($ph.axis_a.seconds) s): raw tap saw $($A.raw_seen)/250 — the loss is AT/BELOW notify (h1 silent overflow SUPPORTED: the missing files ARE the flood signature; notify 7 never emits an overflow error, so no flood line can appear — flood lines present: $($rawTap.flood_lines))"; $reasons += "eye saw $($A.eye_seen)/250, shadow decided $($A.shadow_decided)/250" }
+          elseif ($A.eye_seen -lt 125) { $signature = "diagnosed-s4-burst-blind-raw-saw"; $reasons += "AXIS A (250-file burst, user session, $($ph.axis_a.seconds) s): raw tap saw $($A.raw_seen)/250 and shadow decided $($A.shadow_decided)/250, but the eye saw $($A.eye_seen)/250 — the loss is IN THE DEBOUNCED PIPELINE (h2, or the eye's send path); h1 is EXCLUDED at the raw level for this axis (flood lines present: $($rawTap.flood_lines))" }
+          elseif ($null -eq $C) { $signature = "diagnosed-s4-system-axis-failed"; $reasons += "AXIS C (SYSTEM burst) never executed: task create ok: $($ph.axis_c.task_create_ok); task run ok: $($ph.axis_c.task_run_ok); marker found: $($ph.axis_c.marker_found) — HARNESS failure, not an eye finding; axes A/B stand as measured (A eye $($A.eye_seen)/250 raw $($A.raw_seen)/250; B eye $($B.eye_seen)/10 raw $($B.raw_seen)/10); council 24 decides whether to retry the SYSTEM axis" }
+          elseif ($C.raw_seen -lt 125) { $signature = "diagnosed-s4-system-blind-raw-blind"; $reasons += "AXIS C (250-file burst by $($ph.axis_c.writer) in $($ph.axis_c.write_seconds) s): raw tap saw $($C.raw_seen)/250 — the SYSTEM burst is invisible even to the raw tap: h3 SUPPORTED (session-level invisibility of SYSTEM writes)"; $reasons += "axis A for comparison: eye $($A.eye_seen)/250, raw $($A.raw_seen)/250" }
+          elseif ($C.eye_seen -lt 125) { $signature = "diagnosed-s4-system-blind-debouncer"; $reasons += "AXIS C (250-file burst by $($ph.axis_c.writer)): raw tap saw $($C.raw_seen)/250 and shadow decided $($C.shadow_decided)/250, but the eye saw $($C.eye_seen)/250 — pipeline-level loss regardless of writer (h3 as session-invisibility EXCLUDED)"; $reasons += "axis A for comparison: eye $($A.eye_seen)/250, raw $($A.raw_seen)/250" }
+          elseif ($A.eye_seen -ge 238 -and $C.eye_seen -ge 238) { $signature = "diagnosed-s4-burst-seen"; $reasons += "the blindness did NOT reproduce: eye saw $($A.eye_seen)/250 of the user burst and $($C.eye_seen)/250 of the SYSTEM burst (raw $($A.raw_seen)/250 and $($C.raw_seen)/250) — D5 EXCLUSION of user-session burst blindness, NOT acquittal of h3; the slice-8 blindness needs another mechanism" }
+          else { $signature = "diagnosed-s4-mixed"; $reasons += "no tree branch matched (A eye $($A.eye_seen)/250 raw $($A.raw_seen)/250 shadow $($A.shadow_decided)/250; B eye $($B.eye_seen)/10 raw $($B.raw_seen)/10; C eye $(if ($null -ne $C) { $C.eye_seen } else { 'n/a' })/250 raw $(if ($null -ne $C) { $C.raw_seen } else { 'n/a' })/250) — the table decides, council 24 reads it whole" }
+          # Flood evidence, recorded on EVERY signature (D2): a flood
+          # line would contradict the notify-7 source reading; zero
+          # flood lines with complete raw coverage excludes h1 for
+          # the axis it covers.
+          if ($rawTap.flood_lines -gt 0) {
+            $reasons += "FLOOD SIGNAL PRESENT ($($rawTap.flood_lines) raw.flood lines) — this CONTRADICTS the cycle-66 source reading that notify 7 never emits an overflow error; texts: $($rawTap.flood_texts -join ' | ')"
+          } else {
+            $reasons += "no flood signal in this run (0 raw.flood lines) — consistent with the notify-7 source reading; flood evidence is coverage: A raw $($A.raw_seen)/250, B raw $($B.raw_seen)/10, C raw $(if ($null -ne $C) { $C.raw_seen } else { 'n/a' })/250"
+          }
+          if ($null -eq $eyeExitCode -and $eventlogCount -eq 0 -and $signature -eq "inconclusive") {
+            $signature = "inconclusive-by-design"; $reasons += "NO exit code captured for the eye AND no event-log entry — inconclusive BY DESIGN, not evidence for any killer; council 24 decides with the same question, no new diagnostic without it"
+          }
+          $verdict = $signature
+          $results = @{
+            run_id = $env:GITHUB_RUN_ID; diag_id = $env:DIAG_ID; verdict = $verdict; signature = $signature; reasons = $reasons
+            run = 1; council = 23; run_kind = "s4-diagnostic"
+            m5_note = "does not prove eye survival outside a live step nor device performance"
+            armed = $live.armed; arm_ts = $live.arm_ts; eye_pid = $live.eye_pid
+            axes = @{ a = $ph.axis_a; b = $ph.axis_b; c = $ph.axis_c }
+            raw_tap = $rawTap
+            live_cycle = $live; defender = $def
+            control = @{ pid = $ctl.control_pid; launch_ts = $ctl.control_launch_ts; mode = $ctl.control_mode; pulse_secs = $ctl.control_pulse_secs; heartbeat_secs = $ctl.heartbeat_secs; exit_code = $controlExitCode; lifetime_secs = $controlLifetimeSecs; died_early = $controlDiedEarly; survived = $controlSurvived }
+            eye_exit = @{ exit_code = $eyeExitCode; exited_on_stop = $eyeExitedOnStop; natural = (-not $eyeKilledByStop); killed_by_stop = $eyeKilledByStop }
+            eventlog = $evlog
+            runner_note = "does not prove device performance"
+          }
+          $results | ConvertTo-Json -Depth 12 | Out-File -FilePath "$env:DIAG_DIR\eye-diagnostic-s4-results.json" -Encoding utf8
+          "EYE_DIAG_S4_VERDICT=$verdict" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          # Push the verdict JSON to spike-results under a distinct name.
+          git config user.name "BIMO"
+          git config user.email "bimo@yassinsmr.local"
+          git fetch origin spike-results
+          git checkout spike-results
+          $resultsName = "eye-diagnostic-s4-run-$env:GITHUB_RUN_ID.json"
+          Copy-Item "$env:DIAG_DIR\eye-diagnostic-s4-results.json" $resultsName
+          git add $resultsName
+          git commit -m "eye diagnostic S4 run $env:GITHUB_RUN_ID`: verdict $verdict" --allow-empty
+          git push origin spike-results
+          Write-Host "D7: eye-diagnostic-s4-results.json pushed as $resultsName (verdict=$verdict)"
+
+      - name: D8 upload diagnostic results + raw logs (mandatory)
+        uses: actions/upload-artifact@v4
+        with:
+          name: eye-diagnostic-s4-run-${{ github.run_id }}
+          path: |
+            ${{ env.DIAG_DIR }}\eye-diagnostic-s4-results.json
+            ${{ env.DIAG_DIR }}\diag-live-cycle.json
+            ${{ env.EYE_DATA }}\eye-events.jsonl
+            ${{ env.EYE_DATA }}\eye-raw-events.jsonl
+            ${{ env.DIAG_DIR }}\eye-stdout.log
+            ${{ env.DIAG_DIR }}\eye-stderr.log
+            ${{ env.DIAG_DIR }}\control-stdout.log
+            ${{ env.DIAG_DIR }}\control-stderr.log
+            ${{ env.DIAG_DIR }}\control-pulse.log
+            ${{ env.DIAG_DIR }}\sys-burst.ps1
+            ${{ env.DIAG_DIR }}\diag-*.json
+          if-no-files-found: error
+
+      - name: D9 diagnostic verdict gate
+        shell: pwsh
+        run: |
+          if ($env:EYE_DIAG_S4_VERDICT -notlike "diagnosed-*") { throw "eye diagnostic S4: $($env:EYE_DIAG_S4_VERDICT) — no decisive verdict; per council 23 condition D5 no new run until council 24" }
+          Write-Host "eye diagnostic S4: $($env:EYE_DIAG_S4_VERDICT)"

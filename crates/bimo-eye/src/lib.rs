@@ -18,6 +18,7 @@ pub mod eye;
 pub mod hash_worker;
 pub mod log;
 pub mod notify;
+pub mod rawtap;
 pub mod reconcile;
 
 /// Shot wiring (feature `eye-shots`, Windows only): the request flag

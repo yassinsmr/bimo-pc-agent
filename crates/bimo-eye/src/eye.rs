@@ -68,6 +68,10 @@ pub struct EyeHandle {
     wintrack: Option<bimo_wintrack::WinTrack>,
     /// Bridge thread: `WinEvent` → `EyeEvent` into the eye channel.
     win_bridge: Option<JoinHandle<()>>,
+    /// Raw tap (council 23, diagnostic S4, cycle 66): a second,
+    /// independent notify watcher writing eye-raw-events.jsonl. Its
+    /// own thread + file; it never sends to the eye channel.
+    raw_tap: Option<JoinHandle<()>>,
     /// Shot producer (feature `eye-shots`, Windows only).
     shot_producer: Option<JoinHandle<()>>,
 }
@@ -91,6 +95,13 @@ impl EyeHandle {
         // can exit once every other producer is gone.
         if let Some(h) = self.shot_producer.take() {
             join_timeout(h, "shot producer");
+        }
+
+        // Raw tap (cycle 66): join before the other producers — its
+        // file is independent of the writer, and joining it here
+        // guarantees the raw log is complete before stop() returns.
+        if let Some(h) = self.raw_tap.take() {
+            join_timeout(h, "raw_tap");
         }
 
         // Join order is start() order: watcher, snapshot, hash,
@@ -263,6 +274,19 @@ pub fn start(cfg: EyeConfig) -> Result<EyeHandle, String> {
         stop_flag.clone(),
         Duration::from_secs(cfg.debounce_secs),
     )?;
+    // Raw tap (council 23, diagnostic S4, cycle 66): a second,
+    // independent notify watcher on the same folders, recording every
+    // raw event + shadow debounce decisions + its own heartbeat in
+    // eye-raw-events.jsonl. Instrumentation ONLY — it never sends to
+    // the eye channel and never touches the debounced pipeline (D3).
+    // Fail-closed like the watcher: if the tap cannot start, the eye
+    // does not start silently blind for diagnostics.
+    let raw_tap_handle = crate::rawtap::start_raw_tap(
+        cfg.watch_dirs.clone(),
+        cfg.data_dir.clone(),
+        stop_flag.clone(),
+        Duration::from_secs(cfg.debounce_secs),
+    )?;
     let snapshot_handle = snapshot::start_snapshotter(
         tx.clone(),
         Duration::from_secs(cfg.snapshot_secs),
@@ -331,6 +355,7 @@ pub fn start(cfg: EyeConfig) -> Result<EyeHandle, String> {
         ],
         wintrack,
         win_bridge,
+        raw_tap: Some(raw_tap_handle),
         shot_producer,
     })
 }
