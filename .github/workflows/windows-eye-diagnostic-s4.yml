@@ -93,16 +93,17 @@
 # live step nor device performance". BIMO_EYE_PLAINTEXT_OK inside the
 # live step only, never job/machine scope, never on the Legion path.
 #
-# Standing rule: the TEMPORARY push trigger is removed immediately
-# after this run fires (one push only). The spike workflow gets NO
-# trigger ever. workflow_dispatch is kept so the workflow stays
-# triggerable if it ever reaches main.
+# NOTE (cycle 66): `workflow_dispatch` ONLY. The temporary `push`
+# trigger was removed after the S4 diagnostic run fired
+# (run 46077570518).
+# GitHub's web UI lists workflows from the default branch only, and
+# this file lives on hand-thin-slice-c50 — so it cannot be dispatched
+# from the UI, and no API token exists on this machine (gh is not
+# logged in; the GitHub connector returns 403).
 name: windows-eye-diagnostic-s4
 
 on:
   workflow_dispatch:
-  push:
-    branches: [hand-thin-slice-c50]
 
 permissions:
   contents: write
