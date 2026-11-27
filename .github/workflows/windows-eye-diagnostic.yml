@@ -55,8 +55,6 @@
 # triggerable if it ever reaches main.
 on:
   workflow_dispatch:
-  push:
-    branches: [hand-thin-slice-c50]
 
 permissions:
   contents: write
