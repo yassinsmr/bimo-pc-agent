@@ -18,11 +18,12 @@
 # on every branch. Every binding element of condition 1 is kept: eye-only,
 # arm + 30 s idle + probe at ~15 s + stop, no install, no slice.
 #
-# Dispatch (condition 4): a TEMPORARY `push` trigger, path-filtered to
-# this file, fires the run ONCE on push; it is removed in a follow-up
-# commit immediately after the run fires. The spike workflow gets NO
-# trigger ever (cap "no run 5" preserved). workflow_dispatch is kept so
-# the workflow stays triggerable if it ever reaches main.
+# Dispatch (condition 4): the TEMPORARY `push` trigger was removed in
+# this commit, immediately after diagnostic run 2 fired on it
+# (run 46001835211, verdict diagnosed-process-dead-no-trace). The spike
+# workflow gets NO trigger ever (cap "no run 5" preserved).
+# workflow_dispatch is kept so the workflow stays triggerable if it ever
+# reaches main.
 #
 # Verdict: `diagnosed-<signature>` (job passes — the diagnosis succeeded)
 # or `inconclusive` (job fails — no signature named; run 3 still needs a
@@ -32,9 +33,6 @@
 # proves nothing).
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - '.github/workflows/windows-eye-diagnostic.yml'
 
 permissions:
   contents: write
