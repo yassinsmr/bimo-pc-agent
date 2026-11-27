@@ -1,0 +1,60 @@
+{
+  "thresholds": {
+    "T1": {
+      "threshold": "T1",
+      "probe": "C:\\Program Files\\bimo-slice-probe-spike-45966533500\\probe.exe",
+      "detected_ms": null,
+      "status": "fail",
+      "completed_ms": null,
+      "limit_ms": 10000
+    },
+    "T6": {
+      "exit_code": 0,
+      "status": "pass",
+      "threshold": "T6"
+    },
+    "T2": {
+      "noise_count": 0,
+      "limit": 50,
+      "status": "pass",
+      "window_secs": 60,
+      "threshold": "T2"
+    },
+    "T5": {
+      "threshold": "T5",
+      "status": "recorded",
+      "elevated": true
+    },
+    "T4": {
+      "gpg": "C:\\Program Files\\Git\\usr\\bin\\gpg.exe",
+      "threshold": "T4",
+      "status": "pass"
+    },
+    "T3": {
+      "renamed_ms": null,
+      "limit_ms": 30000,
+      "status": "fail",
+      "threshold": "T3",
+      "first_seen": false
+    }
+  },
+  "L1": {
+    "trial": "L1",
+    "detail": "msiexec /a exit 0, 218 files extracted under deny-write lock",
+    "extracted_files": 218,
+    "msiexec_exit": 0,
+    "outcome": "applicable"
+  },
+  "ts": "2026-11-27T08:36:41.1721225+00:00",
+  "eye": {
+    "stop": null
+  },
+  "verdict": "fail",
+  "notes": [
+    "runner numbers do not prove device performance (flawhunt 11-z)",
+    "no Defender check runs in this spike (realtime was off on the runner in the eye spike)",
+    "no real fullscreen game on the runner; the fullscreen-overlay gate is decided on the Legion (second gate)"
+  ],
+  "run_id": "45966533500",
+  "missing_fragments": []
+}
