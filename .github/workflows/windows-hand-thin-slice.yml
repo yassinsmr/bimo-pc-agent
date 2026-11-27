@@ -31,7 +31,15 @@
 #   for the file and calls handle.stop()); the stop step force-kills
 #   only after a 30 s grace, as a safety net.
 #
-# UPDATED (council, 2026-11-27, run 2 verdict fail): the council ruled
+# UPDATED (council #2, 2026-11-27, run 3 verdict fail): F3 named the
+# cause — File.ReadAllLines opens with FileShare.Read only, which
+# Windows rejects against the live writer (run 3: F2 pass, F3 fail,
+# ERROR_SHARING_VIOLATION). Fix is in spike-log.ps1: shared read
+# (FileShare.ReadWrite). The council ruled (ب) with an AIRTIGHT cap:
+# run 4 is the LAST run whatever its failure signature — no run 5.
+# A repeated same-error fail closes the question procedurally (no
+# run 5); it does NOT by itself prove the watcher blind — the §28.2
+# ruling must record that ambiguity honestly.
 # (ب) — harness fix + ONE re-run. Run 2 failed T1+T3 with a fully
 # silent eye (nulls everywhere, T2 noise 0) and a confirmed `$pid`
 # bug in the stop step; the run could not discriminate dead-eye /

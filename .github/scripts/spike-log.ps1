@@ -5,13 +5,41 @@
 # Lines that are not JSON (a torn write mid-flush) are skipped —
 # the writer flushes after every line (log.rs), so a torn line is
 # transient, never the steady state.
+#
+# SHARING RULE (council fix, run 3 — read this before touching the
+# open call): the eye holds the log open with WRITE access for the
+# whole run (log.rs: LogWriter keeps the handle; closed only in
+# close()). Windows sharing is checked BOTH ways: a new open must
+# share every access the existing handle holds. .NET's
+# File.ReadAllLines opens with FileShare.Read only, so Windows
+# rejects it against the live writer (ERROR_SHARING_VIOLATION —
+# run 3 failed F3 on exactly this). FileShare.ReadWrite accommodates
+# the writer's access. A Rust reader (File::open, share
+# Read|Write|Delete) succeeds for the same reason — the eye self-test
+# reads its own log live on Windows CI (22/22). Never go back to
+# ReadAllLines / Get-Content defaults for this file while the eye
+# is alive.
+
+# Read all lines of a file the eye may still be appending to.
+# Returns @() after 5 failed attempts (transient lock / torn write),
+# never throws — polling callers rely on that.
+function Read-EyeLogLines {
+  param([string]$Path)
+  $fs = [System.IO.File]::Open($Path, 'Open', 'Read', 'ReadWrite')
+  $sr = New-Object System.IO.StreamReader($fs)
+  try {
+    return @($sr.ReadToEnd() -split "`r?`n")
+  } finally {
+    $sr.Close()
+  }
+}
 
 function Read-EyeLog {
   param([string]$Path)
   $tries = 0
   while ($true) {
     try {
-      $lines = [System.IO.File]::ReadAllLines($Path)
+      $lines = Read-EyeLogLines -Path $Path
       break
     } catch {
       $tries++
@@ -68,7 +96,7 @@ function Test-EyeLogReadable {
   }
   $total = 0; $json = 0; $hasStart = $false
   try {
-    $lines = [System.IO.File]::ReadAllLines($Path)
+    $lines = Read-EyeLogLines -Path $Path
   } catch {
     throw "eye log unreadable: $Path ($($_.Exception.Message))"
   }
