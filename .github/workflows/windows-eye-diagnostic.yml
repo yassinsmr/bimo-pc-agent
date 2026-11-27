@@ -127,8 +127,8 @@ jobs:
             $ts = (Get-Content $hb -Raw | ConvertFrom-Json).ts
             $hbAge = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($ts)).TotalSeconds
           }
-          $pid = [int](Get-Content "$env:DIAG_DIR\eye-pid.txt" -Raw).Trim()
-          $alive = $null -ne (Get-Process -Id $pid -ErrorAction SilentlyContinue)
+          $eyePid = [int](Get-Content "$env:DIAG_DIR\eye-pid.txt" -Raw).Trim()
+          $alive = $null -ne (Get-Process -Id $eyePid -ErrorAction SilentlyContinue)
           @{ at = "15s"; log_lines = $lines; last_ts = $lastTs; heartbeat_age_secs = $hbAge; process_alive = $alive } | ConvertTo-Json | Out-File -FilePath "$env:DIAG_DIR\diag-liveness-15s.json" -Encoding utf8
           Write-Host "D2: 15s liveness — lines=$lines last_ts=$lastTs hb_age=$hbAge alive=$alive"
 
@@ -186,8 +186,8 @@ jobs:
             $ts = (Get-Content $hb -Raw | ConvertFrom-Json).ts
             $hbAge = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($ts)).TotalSeconds
           }
-          $pid = [int](Get-Content "$env:DIAG_DIR\eye-pid.txt" -Raw).Trim()
-          $alive = $null -ne (Get-Process -Id $pid -ErrorAction SilentlyContinue)
+          $eyePid = [int](Get-Content "$env:DIAG_DIR\eye-pid.txt" -Raw).Trim()
+          $alive = $null -ne (Get-Process -Id $eyePid -ErrorAction SilentlyContinue)
           @{ at = "30s"; log_lines = $lines; last_ts = $lastTs; heartbeat_age_secs = $hbAge; process_alive = $alive } | ConvertTo-Json | Out-File -FilePath "$env:DIAG_DIR\diag-liveness-30s.json" -Encoding utf8
           Write-Host "D4: 30s liveness — lines=$lines last_ts=$lastTs hb_age=$hbAge alive=$alive"
 
@@ -197,9 +197,9 @@ jobs:
           $ErrorActionPreference = "Continue"
           New-Item -ItemType File -Force -Path "$env:EYE_DATA\eye.stop" | Out-Null
           Start-Sleep -Seconds 5
-          $pid = [int](Get-Content "$env:DIAG_DIR\eye-pid.txt" -Raw).Trim()
-          $alive = $null -ne (Get-Process -Id $pid -ErrorAction SilentlyContinue)
-          if ($alive) { Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue }
+          $eyePid = [int](Get-Content "$env:DIAG_DIR\eye-pid.txt" -Raw).Trim()
+          $alive = $null -ne (Get-Process -Id $eyePid -ErrorAction SilentlyContinue)
+          if ($alive) { Stop-Process -Id $eyePid -Force -ErrorAction SilentlyContinue }
           $hbAge = $null
           $hb = "$env:EYE_DATA\heartbeat.json"
           if (Test-Path $hb) {
