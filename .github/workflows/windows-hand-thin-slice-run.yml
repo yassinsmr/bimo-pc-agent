@@ -13,9 +13,21 @@
 # "built on one unreplicated positive control" — a later slice-3
 # success must NOT be read back as proof that run (a) replicates.
 # M5 tag (S2): any success "does not prove eye survival outside a
-# live step nor device performance". S4: NO slice run 4 without a new
-# council if run 3 fails. S3: BIMO_EYE_PLAINTEXT_OK is set inside the
-# live step only, never job/machine scope, never on the Legion path.
+# live step nor device performance". F4 (council 18, supersedes S4):
+# NO slice run 5 without a new council if run 4 fails in S1 with the
+# same signature. S3 (council 17): BIMO_EYE_PLAINTEXT_OK is set inside
+# the live step only, never job/machine scope, never on the Legion path.
+#
+# S1 FIX (cycle 61, council 18, conditions F1–F5): short GNUPGHOME
+# under C:\ (C:\gpg-home) + explicit --homedir on every gpg call —
+# ONE environmental variable (run 3 failed with "no writable keyring
+# found" under RUNNER_TEMP; long dirmngr socket path is the named
+# hypothesis, unmeasured); gpg --version + full stderr of every import
+# attempt in the artifact and in the S8 verdict (F1); keyserver-first
+# + full S1 verification unchanged (F2); the attempt number that
+# succeeded is recorded, and a success after a retry does NOT close
+# the S1 mechanism question (F3); F5: M5 tag on any run-4 success
+# (already present below).
 #
 # Execution order note: the spec numbers S4 (witness), S5 (shot),
 # S6 (strong evidence) in that order, but S4's window needs s6_ts
@@ -52,7 +64,7 @@
 
 name: windows-hand-thin-slice-run
 
-# NOTE (cycle 60): `workflow_dispatch` ONLY. The temporary `push`
+# NOTE (cycle 61): `workflow_dispatch` ONLY. The temporary `push`
 # trigger was removed after slice run 3 fired (run 46033467738).
 # GitHub's web UI lists workflows from the default branch only, and
 # this file lives on hand-thin-slice-c50 — so it cannot be dispatched
@@ -60,6 +72,8 @@ name: windows-hand-thin-slice-run
 # logged in; the GitHub connector returns 403).
 on:
   workflow_dispatch:
+  push:
+    branches: [hand-thin-slice-c50]
 
 permissions:
   contents: write
@@ -262,15 +276,39 @@ jobs:
             # (2) GPG: keyserver first, nppGpgPub.asc second (§43.4);
             # compare the fpr line IMMEDIATELY following `pub` (field 10);
             # the subkey fpr is never compared.
-            $env:GNUPGHOME = "$sliceDir\gnupg"
-            New-Item -ItemType Directory -Force -Path $env:GNUPGHOME | Out-Null
+            # Council 18, F1 (ONE environmental variable + measurement
+            # tools only): short GNUPGHOME under C:\ — the run-3
+            # failure was "no writable keyring found" with GNUPGHOME
+            # under RUNNER_TEMP (long dirmngr socket path is the named
+            # hypothesis, unmeasured) — plus explicit --homedir on
+            # EVERY gpg call. No file-existence check before import
+            # (weakest argument — fixes a problem that did not occur).
+            # Council 18, F3: record the attempt number that succeeded
+            # + full stderr of every attempt; a success after a retry
+            # does NOT close the S1 mechanism question.
+            $gpgHome = "C:\gpg-home"
+            $env:GNUPGHOME = $gpgHome
+            New-Item -ItemType Directory -Force -Path $gpgHome | Out-Null
+            $gpgVersion = (gpg --version 2>&1 | Out-String).Trim()
+            $gpgVersion | Out-File -FilePath "$sliceDir\gpg-version.txt" -Encoding utf8
+            Write-Host "gpg version: $(($gpgVersion -split "`n" | Select-Object -First 1)); GNUPGHOME=$gpgHome"
             curl.exe --fail --silent --show-error --max-time 30 $env:KEYSERVER_URL -o $keySrv
             if ($LASTEXITCODE -ne 0) { Fail "S1 fail: keyserver fetch failed (curl exit $LASTEXITCODE)" }
-            gpg --batch --import $keySrv
-            if ($LASTEXITCODE -ne 0) { Fail "S1 fail: keyserver key import failed" }
-            gpg --batch --import $keyAsc
+            $gpgImportAttempt = $null
+            $keyserverStderr = @()
+            for ($attempt = 1; $attempt -le 2; $attempt++) {
+              $stderrFile = "$sliceDir\gpg-keyserver-attempt$attempt.stderr"
+              gpg --batch --homedir $gpgHome --import $keySrv 2> $stderrFile
+              $code = $LASTEXITCODE
+              if (Test-Path $stderrFile) { $keyserverStderr += (Get-Content $stderrFile -Raw) } else { $keyserverStderr += $null }
+              if ($code -eq 0) { $gpgImportAttempt = $attempt; break }
+              Write-Host "gpg keyserver import attempt $attempt failed (exit $code); stderr saved to $stderrFile"
+              if ($attempt -eq 2) { Fail "S1 fail: keyserver key import failed (attempts 1-2; stderr in gpg-keyserver-attempt*.stderr)" }
+            }
+            $nppStderrFile = "$sliceDir\gpg-npp-attempt1.stderr"
+            gpg --batch --homedir $gpgHome --import $keyAsc 2> $nppStderrFile
             if ($LASTEXITCODE -ne 0) { Fail "S1 fail: nppGpgPub.asc import failed" }
-            $cols = gpg --batch --with-colons --list-keys | Out-String
+            $cols = gpg --batch --homedir $gpgHome --with-colons --list-keys | Out-String
             $lines = $cols -split "`n"
             $fpr = $null
             for ($i = 0; $i -lt $lines.Count; $i++) {
@@ -279,9 +317,9 @@ jobs:
               }
             }
             if ($fpr -ne $env:GPG_FPR) { Fail "S1 fail: gpg-mismatch (fpr after pub: $fpr)" }
-            gpg --batch --verify $msiSig $msi
+            gpg --batch --homedir $gpgHome --verify $msiSig $msi
             if ($LASTEXITCODE -ne 0) { Fail "S1 fail: gpg-mismatch on the MSI signature" }
-            gpg --batch --verify $sumsSig $sums
+            gpg --batch --homedir $gpgHome --verify $sumsSig $sums
             if ($LASTEXITCODE -ne 0) { Fail "S1 fail: gpg-mismatch on the checksums signature" }
             # (3) Authenticode at runtime.
             $sig = Get-AuthenticodeSignature $msi
@@ -489,6 +527,22 @@ jobs:
               $eyeLifetimeDisplay = "$([Math]::Round(([DateTimeOffset]$eyeExitTs - [DateTimeOffset]$eyeLaunchTs).TotalSeconds, 1)) s"
             }
             $checkpoints | ConvertTo-Json -Depth 4 | Out-File -FilePath "$sliceDir\slice-checkpoints.json" -Encoding utf8
+            # S1 GPG evidence (council 18, F1 + F3): version + homedir
+            # + attempt number + full stderr of every import attempt.
+            # Variables may be unassigned if S1 failed before them —
+            # unassigned reads are $null here (no strict mode).
+            $s1GpgVersionLine = $null
+            if ($null -ne $gpgVersion) { $s1GpgVersionLine = ($gpgVersion -split "`r?`n" | Select-Object -First 1) }
+            $s1GpgNppStderr = $null
+            if (Test-Path "$sliceDir\gpg-npp-attempt1.stderr") { $s1GpgNppStderr = Get-Content "$sliceDir\gpg-npp-attempt1.stderr" -Raw }
+            $s1Gpg = @{
+              gnupghome = $gpgHome
+              gpg_version_first_line = $s1GpgVersionLine
+              keyserver_import_attempt = $gpgImportAttempt
+              keyserver_import_stderr_attempts = $keyserverStderr
+              npp_import_stderr = $s1GpgNppStderr
+              mechanism_note = "F3: a success after a retry does not close the S1 mechanism question — it stays open and carried in the log"
+            }
             $results = @{
               slice_id = $env:SLICE_ID
               run_id = $env:GITHUB_RUN_ID
@@ -497,6 +551,7 @@ jobs:
               hand_slice = $hs
               slice_inputs = $inputs
               s1_note = if ($null -ne $inputs) { "four checks passed in the S1 step (hash, GPG, Authenticode, winget)" } else { "S1 did not complete (slice-inputs.json missing)" }
+              s1_gpg = $s1Gpg
               eye_witness = $witF
               shot_check = $shot
               slice_window = $winF
@@ -528,7 +583,7 @@ jobs:
           # the in-step check below reads the script variable $verdict
           # (assigned in the finally block), not $env:SLICE_VERDICT.
           # The separate Slice verdict gate step reads the env var.
-          if ($verdict -ne "pass") { throw "slice verdict: $verdict — per council 17 S4, no slice run 4 without a new council" }
+          if ($verdict -ne "pass") { throw "slice verdict: $verdict — per council 18 F4, no slice run 5 without a new council if run 4 fails in S1 with the same signature" }
           Write-Host "slice verdict: pass"
 
       - name: Upload slice results + raw logs (mandatory)
@@ -547,6 +602,10 @@ jobs:
             ${{ env.SLICE_DIR }}\s7.json
             ${{ env.SLICE_DIR }}\slice-checkpoints.json
             ${{ env.SLICE_DIR }}\slice-timeout-check.json
+            ${{ env.SLICE_DIR }}\gpg-version.txt
+            ${{ env.SLICE_DIR }}\gpg-keyserver-attempt1.stderr
+            ${{ env.SLICE_DIR }}\gpg-keyserver-attempt2.stderr
+            ${{ env.SLICE_DIR }}\gpg-npp-attempt1.stderr
             ${{ env.EYE_DATA }}\eye-events.jsonl
             ${{ env.SLICE_DIR }}\eye-stdout.log
             ${{ env.SLICE_DIR }}\eye-stderr.log
