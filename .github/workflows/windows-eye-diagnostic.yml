@@ -22,11 +22,11 @@
 # no exit code AND no event-log entry, the verdict is
 # inconclusive-by-design — not evidence for any killer.
 #
-# Dispatch: a TEMPORARY `push` trigger, path-filtered to this file,
-# fires the run ONCE on push; it is removed in a follow-up commit
-# immediately after the run fires (council 13 condition 4 pattern).
-# The spike workflow gets NO trigger ever. workflow_dispatch is kept so
-# the workflow stays triggerable if it ever reaches main.
+# Dispatch: the TEMPORARY `push` trigger was removed in this commit,
+# immediately after diagnostic run 3 fired on it (run 46008686608,
+# verdict diagnosed-control-dead-early). The spike workflow gets NO
+# trigger ever. workflow_dispatch is kept so the workflow stays
+# triggerable if it ever reaches main.
 #
 # Verdict: `diagnosed-<signature>` (job passes — the diagnosis
 # succeeded) or `inconclusive` / `inconclusive-by-design` (job fails —
@@ -38,9 +38,6 @@
 # proves nothing).
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - '.github/workflows/windows-eye-diagnostic.yml'
 
 permissions:
   contents: write
@@ -351,6 +348,10 @@ jobs:
             $controlLifetimeSecs = ([DateTimeOffset]::Parse($controlExit.exit_ts) - [DateTimeOffset]::Parse($ctl.control_launch_ts)).TotalSeconds
             if ($controlLifetimeSecs -lt 40) { $controlDiedEarly = $true } else { $controlSurvived = $true }
           }
+          # Display value for reason strings: a missing exit file means
+          # the lifetime is UNKNOWN, never 0 ([Math]::Round($null) is 0).
+          $controlLifetimeDisplay = "unknown"
+          if ($null -ne $controlLifetimeSecs) { $controlLifetimeDisplay = "$([Math]::Round($controlLifetimeSecs, 1))" }
           if (-not $controlDiedEarly -and $stop.control_alive_at_stop -and $l30.control_alive) { $controlSurvived = $true }
           if ($l15.control_alive -eq $false) { $controlDiedEarly = $true }
           # The eye exit code is natural-death evidence ONLY if we did
@@ -368,10 +369,10 @@ jobs:
           $signature = "inconclusive"; $reasons = @()
           if (-not $arm.armed) { $signature = "diagnosed-never-armed"; $reasons += "eye never armed: no fresh heartbeat in 30 s (R9)" }
           elseif ($pr.log_encrypted) { $signature = "diagnosed-log-encrypted"; $reasons += "log lines carry no type field (DPAPI wrappers): plaintext opt-in regressed" }
-          elseif ($controlDiedEarly) { $signature = "diagnosed-control-dead-early"; $reasons += "control (same launch, 45 s sleep) died before its sleep ended (lifetime $([Math]::Round($controlLifetimeSecs, 1)) s; alive at 15 s: $($l15.control_alive); alive at 30 s: $($l30.control_alive)): the killer is in the launch/step environment, not in the eye"; if (-not $monitorStarted -or ($null -eq $eyeExit -and $null -eq $controlExit)) { $reasons += "monitor produced no exit files (monitor itself a D1 child): consistent with the arming step killing its children when it ends" } }
+          elseif ($controlDiedEarly) { $signature = "diagnosed-control-dead-early"; $reasons += "control (same launch, 45 s sleep) died before its sleep ended (lifetime $($controlLifetimeDisplay) s; alive at 15 s: $($l15.control_alive); alive at 30 s: $($l30.control_alive)): the killer is in the launch/step environment, not in the eye"; if (-not $monitorStarted -or ($null -eq $eyeExit -and $null -eq $controlExit)) { $reasons += "monitor produced no exit files (monitor itself a D1 child): consistent with the arming step killing its children when it ends" } }
           elseif ($null -ne $stop.writer_exit_trace -and $stop.writer_exit_trace -match 'write error') { $signature = "diagnosed-write-error"; $reasons += "writer_loop exited with a write error (exact stderr line in writer_exit_trace)" }
           elseif ($null -ne $stop.writer_exit_trace -and $stop.writer_exit_trace -match 'channel closed') { $signature = "diagnosed-channel-closed"; $reasons += "writer_loop exited because the channel closed (all producers dropped)" }
-          elseif (-not $stop.process_alive_at_stop -and $null -eq $stop.writer_exit_trace -and $controlSurvived) { $signature = "diagnosed-process-dead-no-trace"; $reasons += "process dead at stop time with NO writer exit trace; control survived the identical launch (lifetime $([Math]::Round($controlLifetimeSecs, 1)) s), so the killer is eye-specific, not the launcher"; if ($null -ne $eyeExitCode) { $reasons += "eye exit code captured by the monitor: $eyeExitCode (exit at $eyeExitTs)" } else { $reasons += "eye exit code NOT captured (monitor file missing or eye died before the monitor attached): code unknown, signature stands on control survival + no trace" } }
+          elseif (-not $stop.process_alive_at_stop -and $null -eq $stop.writer_exit_trace -and $controlSurvived) { $signature = "diagnosed-process-dead-no-trace"; $reasons += "process dead at stop time with NO writer exit trace; control survived the identical launch (lifetime $($controlLifetimeDisplay) s), so the killer is eye-specific, not the launcher"; if ($null -ne $eyeExitCode) { $reasons += "eye exit code captured by the monitor: $eyeExitCode (exit at $eyeExitTs)" } else { $reasons += "eye exit code NOT captured (monitor file missing or eye died before the monitor attached): code unknown, signature stands on control survival + no trace" } }
           elseif ($stop.process_alive_at_stop -and $l30.heartbeat_age_secs -lt 10 -and $pr.probe_root_seen -and $pr.probe_sub_seen) { $signature = "diagnosed-no-freeze-reproduced"; $reasons += "eye alive at stop, heartbeat fresh at 30 s, both probes sensed: the ~4 s freeze did NOT reproduce in this run" }
           elseif (-not $pr.probe_root_seen -and -not $pr.probe_sub_seen -and $l30.heartbeat_age_secs -lt 10) { $signature = "diagnosed-watcher-silent"; $reasons += "log alive at 30 s (heartbeat fresh) but neither probe sensed: watcher itself silent" }
           elseif ($pr.probe_root_seen -and -not $pr.probe_sub_seen) { $signature = "diagnosed-new-subdir-blind-spot"; $reasons += "root probe sensed, subdir probe missed: notify misses files in subdirectories created after subscription (H1)" }
