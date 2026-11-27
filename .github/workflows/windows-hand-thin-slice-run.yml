@@ -1,0 +1,481 @@
+# Windows hand thin-slice RUN workflow — Track A Unit 3 (the Hand),
+# spec track-a-unit3-thin-slice.md v6 + §45 + §45.9, under the §28.2
+# council ruling (ج)→(أ): custom install folder under a pre-created
+# watched parent (C:\bimo-slice), via TARGETDIR.
+#
+# DRAFT (cycle 55) — not committed until the 8.12-build council rules
+# AND the TARGETDIR pre-verification returns YES. If TARGETDIR is NO,
+# this workflow is reworked for modified (b), not run.
+#
+# Naming (builder decision B3): this is a NEW file. The spike workflow
+# (windows-hand-thin-slice.yml) stays untouched — the spike is capped
+# at 4 runs by council ruling and must never re-run; overwriting it
+# with the slice run would destroy that guard.
+#
+# Execution order note: the spec numbers S4 (witness), S5 (shot),
+# S6 (strong evidence) in that order, but S4's window needs s6_ts
+# (written by S6) and S5 runs after S6 (§29.3). The workflow therefore
+# executes S3 → S6 → S4 → S5 → S7 → S8; the numbers are spec labels,
+# not temporal order.
+#
+# Mandatory revert (§19/§27/§37.1): whenever S3 completed (result
+# done) and any later step fails — or S6 is unreadable (assume present)
+# — phase 2 (S7) runs before the job fails. The S7 step is `if:
+# always()` and keys off the S3_SUCCEEDED marker, never off step
+# outcomes alone. probe-timeout-unsettled (no hand-slice.json) runs
+# NO revert: the machine is discarded per §27.2.
+#
+# Raw-log upload (§28.2 council condition 4, mandatory): the artifact
+# always includes eye-events.jsonl + the eye stdout/stderr logs.
+# Eye death (§28.2 condition 5): the eye is checked alive at S4 time;
+# a dead eye is recorded in the verdict, never passed silently.
+
+name: windows-hand-thin-slice-run
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  SLICE_INSTALL_DIR: 'C:\bimo-slice\Notepad++'
+  WATCH_PARENT: 'C:\bimo-slice'
+  MSI_SHA256: e3b0607a092ce2604fbdac027db2c94915995e8e568ebd226f8c5493c2f61a80
+  MSI_SIZE: 7933952
+  WINGET_PRODUCT_CODE: '{A23B657D-838B-4C9B-8F9D-386E50C1A76B}'
+  WINGET_UPGRADE_CODE: '{CDB13460-04DF-4708-A7FD-4CB4A0684605}'
+  GPG_FPR: 14BCE4362749B2B51F8C71226C429F1D8D84F46E
+  MSI_URL: https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.9.9.1/npp.8.9.9.1.Installer.x64.msi
+  MSI_SIG_URL: https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.9.9.1/npp.8.9.9.1.Installer.x64.msi.sig
+  CHECKSUMS_URL: https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.9.9.1/npp.8.9.9.1.checksums.sha256
+  CHECKSUMS_SIG_URL: https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.9.9.1/npp.8.9.9.1.checksums.sha256.sig
+  GPG_KEY_URL: https://raw.githubusercontent.com/notepad-plus-plus/notepad-plus-plus/master/nppGpgPub.asc
+  KEYSERVER_URL: https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x14BCE4362749B2B51F8C71226C429F1D8D84F46E
+
+jobs:
+  slice:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: hand-thin-slice-c50
+
+      - name: Install Rust (stable + MSVC target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build hand + eye + shot for Windows
+        run: |
+          cargo build --release --target x86_64-pc-windows-msvc --locked -p bimo-hand -p bimo-eye -p bimo-shot
+
+      - name: S0 precheck (custom dir absent + game_mode=false + free space)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $sliceId = "slice-$env:GITHUB_RUN_ID"
+          $sliceDir = "$env:RUNNER_TEMP\bimo-slice-$sliceId"
+          $eyeData = "$sliceDir\eye-data"
+          $handData = "$sliceDir\hand-data"
+          "SLICE_ID=$sliceId" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "SLICE_DIR=$sliceDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "EYE_DATA=$eyeData" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "HAND_DATA=$handData" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          New-Item -ItemType Directory -Force -Path $eyeData | Out-Null
+          New-Item -ItemType Directory -Force -Path $handData | Out-Null
+          # The watched parent is created BEFORE arming (§28.2 (a)):
+          # it exists at arm time, so the missing-folder problem dies
+          # by construction, not by workaround.
+          New-Item -ItemType Directory -Force -Path $env:WATCH_PARENT | Out-Null
+          if (Test-Path $env:SLICE_INSTALL_DIR) { throw "S0 fail: install dir already exists: $env:SLICE_INSTALL_DIR" }
+          # game_mode is a Hand-side flag; the slice never sets it.
+          # Free space on C: (the install drive, §36.7).
+          $drive = Get-PSDrive C
+          $need = [int64]$env:MSI_SIZE + 512MB
+          if ($drive.Free -lt $need) { throw "S0 fail: free space on C: $($drive.Free) < $need" }
+          Write-Host "S0 pass: install dir absent, free space on C: $($drive.Free) bytes"
+
+      - name: S0b arm eye (watch C:\bimo-slice)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          . $env:GITHUB_WORKSPACE\.github\scripts\spike-log.ps1
+          $logPath = "$env:EYE_DATA\eye-events.jsonl"
+          Write-Host "resolved eye log path: $logPath"
+          # Plaintext log is REQUIRED for the PowerShell witness checks
+          # (spike workflow header); the opt-in is recorded in the eye
+          # log itself. Throwaway runner log, never real user data.
+          $env:BIMO_EYE_PLAINTEXT_OK = "1"
+          $eyeExe = "$env:GITHUB_WORKSPACE\target\x86_64-pc-windows-msvc\release\bimo-eye-self-test.exe"
+          $proc = Start-Process -FilePath $eyeExe -ArgumentList @(
+            "--watch", "--data-dir", $env:EYE_DATA,
+            "--watch-dirs", $env:WATCH_PARENT,
+            "--snapshot-secs", "1", "--heartbeat-secs", "2",
+            "--max-secs", "1800"
+          ) -WindowStyle Hidden -PassThru -RedirectStandardOutput "$env:SLICE_DIR\eye-stdout.log" -RedirectStandardError "$env:SLICE_DIR\eye-stderr.log"
+          $eyePid = $proc.Id
+          $eyePid | Out-File -FilePath "$env:SLICE_DIR\eye-pid.txt" -Encoding utf8
+          $deadline = (Get-Date).AddSeconds(30)
+          $armed = $false
+          while ((Get-Date) -lt $deadline) {
+            $hb = "$env:EYE_DATA\heartbeat.json"
+            if (Test-Path $hb) {
+              $ts = (Get-Content $hb -Raw | ConvertFrom-Json).ts
+              $age = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($ts)).TotalSeconds
+              if ($age -lt 10) { $armed = $true; break }
+            }
+            Start-Sleep -Milliseconds 500
+          }
+          if (-not $armed) { throw "S0b fail: no fresh heartbeat.json within 30 s (R9)" }
+          $armTs = [DateTimeOffset]::UtcNow
+          $armTs.ToString("o") | Out-File -FilePath "$env:SLICE_DIR\arm-ts.txt" -Encoding utf8
+          # slice-window.json, started here, completed by S6 (s6_ts).
+          @{ slice_id = $env:SLICE_ID; arm_ts = $armTs.ToString("o"); s3_ts = $null; s6_ts = $null; window_end_ts = $null; product_dir_expected = $env:SLICE_INSTALL_DIR; probe_prefix = "$env:WATCH_PARENT\bimo-slice-probe-$env:SLICE_ID"; msi_sha256 = $env:MSI_SHA256; product_code = $null; install_location_expected = $env:SLICE_INSTALL_DIR } | ConvertTo-Json | Out-File -FilePath "$env:SLICE_DIR\slice-window.json" -Encoding utf8
+          Write-Host "S0b pass: eye armed, pid $eyePid, arm_ts $($armTs.ToString('o'))"
+
+      - name: S0c sense probe (10 s unified, §36.2)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          . $env:GITHUB_WORKSPACE\.github\scripts\spike-log.ps1
+          $probeDir = "$env:WATCH_PARENT\bimo-slice-probe-$env:SLICE_ID"
+          New-Item -ItemType Directory -Force -Path $probeDir | Out-Null
+          $probeFile = "$probeDir\probe.exe"
+          New-Item -ItemType File -Force -Path $probeFile | Out-Null
+          $logPath = "$env:EYE_DATA\eye-events.jsonl"
+          $armTs = [DateTimeOffset]::Parse((Get-Content "$env:SLICE_DIR\arm-ts.txt" -Raw).Trim())
+          $deadline = (Get-Date).AddSeconds(10)
+          $seen = $false
+          while ((Get-Date) -lt $deadline) {
+            $events = Read-EyeLog -Path $logPath
+            $hit = @($events | Where-Object { $_.path -eq $probeFile -and $_.type -in @("file.completed", "install.detected") })
+            if ($hit.Count -ge 1) { $seen = $true; break }
+            Start-Sleep -Milliseconds 500
+          }
+          Remove-Item -Recurse -Force $probeDir -ErrorAction SilentlyContinue
+          if (-not $seen) { throw "S0c fail: probe-failed — no eye event for $probeFile within 10 s (R10)" }
+          Write-Host "S0c pass: probe sensed"
+
+      - name: S1 fetch + verify + measure (four checks, §24.2)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $msi = "$env:SLICE_DIR\npp.8.9.9.1.Installer.x64.msi"
+          $msiSig = "$msi.sig"
+          $sums = "$env:SLICE_DIR\npp.8.9.9.1.checksums.sha256"
+          $sumsSig = "$sums.sig"
+          $keyAsc = "$env:SLICE_DIR\nppGpgPub.asc"
+          $keySrv = "$env:SLICE_DIR\keyserver.asc"
+          "MSI_PATH=$msi" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          curl.exe --fail --location --max-time 120 -o $msi $env:MSI_URL
+          curl.exe --fail --location --max-time 120 -o $msiSig $env:MSI_SIG_URL
+          curl.exe --fail --location --max-time 120 -o $sums $env:CHECKSUMS_URL
+          curl.exe --fail --location --max-time 120 -o $sumsSig $env:CHECKSUMS_SIG_URL
+          curl.exe --fail --location --max-time 120 -o $keyAsc $env:GPG_KEY_URL
+          # (1) Published SHA-256 vs §29-4 + the checksums file.
+          $hash = (Get-FileHash $msi -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne $env:MSI_SHA256.ToLower()) { throw "S1 fail: sha256 mismatch ($hash)" }
+          $sumsLine = Get-Content $sums | Where-Object { $_ -match "npp\.8\.9\.9\.1\.Installer\.x64\.msi" }
+          if (-not $sumsLine -or $sumsLine -notmatch $env:MSI_SHA256.ToLower()) { throw "S1 fail: checksums file does not list the published hash" }
+          $size = (Get-Item $msi).Length
+          if ($size -ne [int64]$env:MSI_SIZE) { throw "S1 fail: size-mismatch ($size != $env:MSI_SIZE)" }
+          # (2) GPG: keyserver first, nppGpgPub.asc second (§43.4);
+          # compare the fpr line IMMEDIATELY following `pub` (field 10);
+          # the subkey fpr is never compared.
+          $env:GNUPGHOME = "$env:SLICE_DIR\gnupg"
+          New-Item -ItemType Directory -Force -Path $env:GNUPGHOME | Out-Null
+          curl.exe --fail --silent --show-error --max-time 30 $env:KEYSERVER_URL -o $keySrv
+          gpg --batch --import $keySrv
+          if ($LASTEXITCODE -ne 0) { throw "S1 fail: keyserver key import failed" }
+          gpg --batch --import $keyAsc
+          if ($LASTEXITCODE -ne 0) { throw "S1 fail: nppGpgPub.asc import failed" }
+          $cols = gpg --batch --with-colons --list-keys | Out-String
+          $lines = $cols -split "`n"
+          $fpr = $null
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match "^pub:") {
+              if ($lines[$i+1] -match "^fpr:") { $fpr = ($lines[$i+1] -split ":")[9]; break }
+            }
+          }
+          if ($fpr -ne $env:GPG_FPR) { throw "S1 fail: gpg-mismatch (fpr after pub: $fpr)" }
+          gpg --batch --verify $msiSig $msi
+          if ($LASTEXITCODE -ne 0) { throw "S1 fail: gpg-mismatch on the MSI signature" }
+          gpg --batch --verify $sumsSig $sums
+          if ($LASTEXITCODE -ne 0) { throw "S1 fail: gpg-mismatch on the checksums signature" }
+          # (3) Authenticode at runtime.
+          $sig = Get-AuthenticodeSignature $msi
+          if ($sig.Status -ne "Valid" -or $sig.SignerCertificate.Subject -notmatch "NOTEPAD\+\+") { throw "S1 fail: unsigned-msi (Authenticode: $($sig.Status))" }
+          # (4) COM read of ProductCode/UpgradeCode (§35.4) + winget cross-check (§35.5).
+          $inst = New-Object -ComObject WindowsInstaller.Installer
+          $db = $inst.Database($msi, 0)
+          function Get-MsiProp($name) {
+            $v = $db.OpenView("SELECT Value FROM Property WHERE Property = '$name'")
+            $v.Execute()
+            $r = $v.Fetch()
+            if ($null -eq $r) { return $null }
+            return $r.StringData(1)
+          }
+          $code = Get-MsiProp "ProductCode"
+          $upcode = Get-MsiProp "UpgradeCode"
+          if ([string]::IsNullOrEmpty($code)) { throw "S1 fail: product-code-unreadable" }
+          if ($code -ne $env:WINGET_PRODUCT_CODE) { throw "S1 fail: product-code-mismatch ($code != $env:WINGET_PRODUCT_CODE) — blocked" }
+          if ($upcode -ne $env:WINGET_UPGRADE_CODE) { throw "S1 fail: upgrade-code-mismatch ($upcode)" }
+          "PRODUCT_CODE=$code" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "UPGRADE_CODE=$upcode" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          @{ slice_id = $env:SLICE_ID; command_id = "slice-npp-001"; msi_path = $msi; msi_sha256 = $hash; msi_size_bytes = $size; product_code = $code; upgrade_code = $upcode; install_dir = $env:SLICE_INSTALL_DIR; install_location_expected = $env:SLICE_INSTALL_DIR; name_substring = "Notepad++"; ttl_secs = 3600 } | ConvertTo-Json | Out-File -FilePath "$env:SLICE_DIR\slice-inputs.json" -Encoding utf8
+          # Record the product code in slice-window.json for S4/S6.
+          $w = Get-Content "$env:SLICE_DIR\slice-window.json" -Raw | ConvertFrom-Json
+          $w.product_code = $code
+          $w | ConvertTo-Json | Out-File -FilePath "$env:SLICE_DIR\slice-window.json" -Encoding utf8
+          Write-Host "S1 pass: hash+size+GPG+Authenticode+winget ok; product_code=$code"
+
+      - name: S1.6 ProductState not installed
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $inst = New-Object -ComObject WindowsInstaller.Installer
+          $state = $inst.ProductState($env:PRODUCT_CODE)
+          # Installed iff state not in {-1, 2} — the same reading as
+          # the Hand's product_is_installed (fail-closed).
+          if ($state -notin @(-1, 2)) { throw "S1.6 fail: preinstalled (ProductState=$state)" }
+          Write-Host "S1.6 pass: ProductState=$state (not installed)"
+
+      - name: Phase 1 — 8.12 install (negatives + S2+S3)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $exe = "$env:GITHUB_WORKSPACE\target\x86_64-pc-windows-msvc\release\bimo-hand-self-test.exe"
+          & $exe --slice --slice-inputs "$env:SLICE_DIR\slice-inputs.json" --data-dir $env:HAND_DATA --out "$env:SLICE_DIR\hand-slice.json" --slice-phase install
+          $code = $LASTEXITCODE
+          $w = Get-Content "$env:SLICE_DIR\slice-window.json" -Raw | ConvertFrom-Json
+          # s3_ts: prefer the recorded S3 start from hand-slice.json.
+          if (Test-Path "$env:SLICE_DIR\hand-slice.json") {
+            $hs0 = Get-Content "$env:SLICE_DIR\hand-slice.json" -Raw | ConvertFrom-Json
+            if ($null -ne $hs0.steps.s3.ts) {
+              $w.s3_ts = ([DateTimeOffset]::FromUnixTimeSeconds([int64]$hs0.steps.s3.ts)).ToString("o")
+            }
+          }
+          if ([string]::IsNullOrEmpty($w.s3_ts)) { $w.s3_ts = ([DateTimeOffset]::UtcNow).ToString("o") }
+          $w | ConvertTo-Json | Out-File -FilePath "$env:SLICE_DIR\slice-window.json" -Encoding utf8
+          # S3_SUCCEEDED marker: hand-slice.json exists AND s3 done.
+          $ok = $false
+          if (Test-Path "$env:SLICE_DIR\hand-slice.json") {
+            $hs = Get-Content "$env:SLICE_DIR\hand-slice.json" -Raw | ConvertFrom-Json
+            $ok = ($hs.steps.s3.result.status -eq "done")
+          }
+          "S3_SUCCEEDED=$ok" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if ($code -ne 0) { throw "Phase 1 fail: 8.12 install exited $code (see hand-slice.json)" }
+          Write-Host "Phase 1 pass: negatives + S2+S3 done"
+
+      - name: S6 verify install (strong evidence; runs before S4/S5)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $inst = New-Object -ComObject WindowsInstaller.Installer
+          $s6 = @{ status = "pass"; reason = $null; product_state = $null; install_location = $null; exe_present = $false; exe_path = $null }
+          try {
+            $state = $inst.ProductState($env:PRODUCT_CODE)
+            $s6.product_state = $state
+            $loc = $inst.ProductInfo($env:PRODUCT_CODE, "InstallLocation")
+            $s6.install_location = $loc
+            # TARGETDIR precheck (cycle 55): the exe is NOT directly in
+            # the install dir — it is under
+            # <install_dir>\Program Files\Notepad++\ (INSTALLFOLDER
+            # under ProgramFiles64Folder). Find it by glob, robust to
+            # the localized "Program Files" name.
+            $exeFound = Get-ChildItem -Recurse -Filter "notepad++.exe" -Path $env:SLICE_INSTALL_DIR -ErrorAction SilentlyContinue | Select-Object -First 1
+            $exePresent = $null -ne $exeFound
+            $s6.exe_present = $exePresent
+            if ($null -ne $exeFound) { $s6.exe_path = $exeFound.FullName }
+            if ($state -in @(-1, 2)) { $s6.status = "fail"; $s6.reason = "product-absent-after-install (R3)" }
+            elseif ([string]::IsNullOrEmpty($loc)) { $s6.status = "fail"; $s6.reason = "install-location-missing" }
+            elseif ($loc -notlike "$env:SLICE_INSTALL_DIR*") { $s6.status = "fail"; $s6.reason = "install-location-outside-custom-dir ($loc)" }
+            elseif (-not $exePresent) { $s6.status = "fail"; $s6.reason = "notepad-exe-missing" }
+          } catch {
+            # §37.1 S6-unreadable: assume present (fail-closed) ->
+            # mandatory revert -> fail-s6-unreadable (revert ok) or
+            # fail-revert-failed (revert failed).
+            $s6.status = "unreadable"; $s6.reason = "s6-unreadable: $($_.Exception.Message)"
+          }
+          $w = Get-Content "$env:SLICE_DIR\slice-window.json" -Raw | ConvertFrom-Json
+          $w.s6_ts = ([DateTimeOffset]::UtcNow).ToString("o")
+          $w.window_end_ts = ([DateTimeOffset]::UtcNow).AddSeconds(30).ToString("o")
+          $w | ConvertTo-Json | Out-File -FilePath "$env:SLICE_DIR\slice-window.json" -Encoding utf8
+          $s6 | ConvertTo-Json | Out-File -FilePath "$env:SLICE_DIR\s6.json" -Encoding utf8
+          "S6_STATUS=$($s6.status)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if ($s6.status -eq "fail") { throw "S6 fail: $($s6.reason)" }
+          if ($s6.status -eq "unreadable") { Write-Host "S6 UNREADABLE: $($s6.reason) — mandatory revert follows (§37.1)"; exit 0 }
+          Write-Host "S6 pass: installed, InstallLocation=$($s6.install_location)"
+
+      - name: S4 check witness (eye-events.jsonl)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          . $env:GITHUB_WORKSPACE\.github\scripts\spike-log.ps1
+          $logPath = "$env:EYE_DATA\eye-events.jsonl"
+          $w = Get-Content "$env:SLICE_DIR\slice-window.json" -Raw | ConvertFrom-Json
+          $armTs = [DateTimeOffset]::Parse($w.arm_ts)
+          $endTs = [DateTimeOffset]::Parse($w.window_end_ts)
+          $eyePid = [int](Get-Content "$env:SLICE_DIR\eye-pid.txt" -Raw).Trim()
+          $eyeAlive = $null -ne (Get-Process -Id $eyePid -ErrorAction SilentlyContinue)
+          $events = Read-EyeLog -Path $logPath
+          $hits = @($events | Where-Object {
+            $_.type -eq "install.detected" -and
+            $_.path -like "$env:SLICE_INSTALL_DIR*" -and
+            $_.path -notlike "$($w.probe_prefix)*" -and
+            ([DateTimeOffset]::Parse($_.ts) -ge $armTs) -and
+            ([DateTimeOffset]::Parse($_.ts) -le $endTs)
+          })
+          $wit = @{ status = "pass"; reason = $null; eye_alive = $eyeAlive; hits = $hits.Count; window = @($armTs.ToString("o"), $endTs.ToString("o")) }
+          if (-not $eyeAlive) { $wit.status = "fail"; $wit.reason = "eye-dead (§28.2 condition 5 — recorded, never passed silently)" }
+          elseif ($hits.Count -eq 0) { $wit.status = "fail"; $wit.reason = "witness-missed (R5)" }
+          $wit | ConvertTo-Json | Out-File -FilePath "$env:SLICE_DIR\witness.json" -Encoding utf8
+          "WITNESS_STATUS=$($wit.status)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if ($wit.status -ne "pass") { throw "S4 fail: $($wit.reason)" }
+          Write-Host "S4 pass: $($hits.Count) install.detected event(s) in the window"
+
+      - name: S5 shot
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $exe = "$env:GITHUB_WORKSPACE\target\x86_64-pc-windows-msvc\release\bimo-shot-self-test.exe"
+          & $exe --out "$env:SLICE_DIR\shot-check.json"
+          if ($LASTEXITCODE -ne 0) { throw "S5 fail: shot-check exited $LASTEXITCODE (R6)" }
+          $shot = Get-Content "$env:SLICE_DIR\shot-check.json" -Raw | ConvertFrom-Json
+          # The shot binary writes its image next to --out by default;
+          # record whatever it produced for S8.
+          Write-Host "S5 pass: shot-check written"
+
+      - name: S7 revert (mandatory when S3 succeeded)
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          if ($env:S3_SUCCEEDED -ne "True") {
+            Write-Host "S7 skipped: S3 did not complete (nothing to revert; probe-timeout-unsettled discards the machine)"
+            @{ status = "skipped"; reason = "s3-not-succeeded"; revert = $null; clean = $null } | ConvertTo-Json | Out-File -FilePath "$env:SLICE_DIR\s7.json" -Encoding utf8
+            exit 0
+          }
+          $exe = "$env:GITHUB_WORKSPACE\target\x86_64-pc-windows-msvc\release\bimo-hand-self-test.exe"
+          & $exe --slice --slice-inputs "$env:SLICE_DIR\slice-inputs.json" --data-dir $env:HAND_DATA --out "$env:SLICE_DIR\hand-slice.json" --slice-phase revert
+          $code = $LASTEXITCODE
+          # verify-revert: the four §37.2 clean checks (workflow side).
+          $inst = New-Object -ComObject WindowsInstaller.Installer
+          $state = $inst.ProductState($env:PRODUCT_CODE)
+          $key = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$env:PRODUCT_CODE"
+          $clean = @{
+            product_absent = ($state -in @(-1, 2))
+            install_dir_absent = (-not (Test-Path $env:SLICE_INSTALL_DIR))
+            # TARGETDIR precheck (cycle 55): shortcuts live under the
+            # install dir's own Start Menu tree
+            # (<install_dir>\Start Menu\Programs\Notepad++), not the
+            # system ProgramData start menu. Inside the install dir, so
+            # covered by install_dir_absent too — checked explicitly.
+            start_menu_absent = (-not (Test-Path "$env:SLICE_INSTALL_DIR\Start Menu\Programs\Notepad++"))
+            uninstall_key_absent = (-not (Test-Path $key))
+          }
+          $clean.clean = ($clean.product_absent -and $clean.install_dir_absent -and $clean.start_menu_absent -and $clean.uninstall_key_absent)
+          $s7 = @{ status = "pass"; reason = $null; revert_exit = $code; clean = $clean }
+          if ($code -ne 0) { $s7.status = "fail"; $s7.reason = "fail-revert-failed (R4)" }
+          elseif (-not $clean.clean) { $s7.status = "fail"; $s7.reason = "fail-revert-failed: not clean after revert" }
+          $s7 | ConvertTo-Json -Depth 4 | Out-File -FilePath "$env:SLICE_DIR\s7.json" -Encoding utf8
+          "S7_STATUS=$($s7.status)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if ($s7.status -ne "pass") { throw "S7 fail: $($s7.reason)" }
+          Write-Host "S7 pass: reverted and clean"
+
+      - name: Stop eye
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          New-Item -ItemType File -Force -Path "$env:EYE_DATA\eye.stop" | Out-Null
+          Start-Sleep -Seconds 5
+          $eyePid = [int](Get-Content "$env:SLICE_DIR\eye-pid.txt" -Raw).Trim()
+          $alive = Get-Process -Id $eyePid -ErrorAction SilentlyContinue
+          if ($null -ne $alive) { Stop-Process -Id $eyePid -Force -ErrorAction SilentlyContinue }
+          Write-Host "eye stopped"
+
+      - name: S8 publish (assemble slice-results.json + push)
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          function Read-JsonOrNull($p) {
+            if (Test-Path $p) { try { return Get-Content $p -Raw | ConvertFrom-Json } catch { return $null } }
+            return $null
+          }
+          $hs = Read-JsonOrNull "$env:SLICE_DIR\hand-slice.json"
+          $inputs = Read-JsonOrNull "$env:SLICE_DIR\slice-inputs.json"
+          $wit = Read-JsonOrNull "$env:SLICE_DIR\witness.json"
+          $shot = Read-JsonOrNull "$env:SLICE_DIR\shot-check.json"
+          $win = Read-JsonOrNull "$env:SLICE_DIR\slice-window.json"
+          $s6 = Read-JsonOrNull "$env:SLICE_DIR\s6.json"
+          $s7 = Read-JsonOrNull "$env:SLICE_DIR\s7.json"
+          $verdict = "pass"
+          $reasons = @()
+          if ($null -eq $hs) { $verdict = "fail"; $reasons += "hand-slice-missing (probe-timeout-unsettled signature: no hand-slice.json)" }
+          elseif ($hs.slice_exit_code -ne 0 -and $null -eq $hs.steps.s7) { $verdict = "fail"; $reasons += "install-phase-failed: $($hs.slice_failure)" }
+          if ($null -ne $s6 -and $s6.status -eq "unreadable") { $verdict = "fail"; $reasons += "fail-s6-unreadable" }
+          elseif ($null -ne $s6 -and $s6.status -ne "pass") { $verdict = "fail"; $reasons += "s6-failed: $($s6.reason)" }
+          if ($null -ne $wit -and $wit.status -ne "pass") { $verdict = "fail"; $reasons += "witness-failed: $($wit.reason)" }
+          if ($null -eq $wit -and $env:S3_SUCCEEDED -eq "True") { $verdict = "fail"; $reasons += "witness-missing" }
+          if ($null -eq $shot) { $verdict = "fail"; $reasons += "shot-missing (R6)" }
+          if ($null -ne $s7 -and $s7.status -eq "fail") { $verdict = "fail"; $reasons += "s7-failed: $($s7.reason)" }
+          if ($null -ne $s7 -and $s7.status -eq "skipped" -and $env:S3_SUCCEEDED -eq "True") { $verdict = "fail"; $reasons += "s7-skipped-but-s3-succeeded" }
+          $results = @{
+            slice_id = $env:SLICE_ID
+            run_id = $env:GITHUB_RUN_ID
+            verdict = $verdict
+            reasons = $reasons
+            hand_slice = $hs
+            slice_inputs = $inputs
+            s1_note = "four checks passed in the S1 step (hash, GPG, Authenticode, winget)"
+            eye_witness = $wit
+            shot_check = $shot
+            slice_window = $win
+            s6 = $s6
+            s7 = $s7
+            runner_note = "does not prove device performance"
+          }
+          $results | ConvertTo-Json -Depth 10 | Out-File -FilePath "$env:SLICE_DIR\slice-results.json" -Encoding utf8
+          "SLICE_VERDICT=$verdict" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          # Push to the spike-results branch under a DISTINCT name —
+          # never clobber spike-results.json.
+          $resultsName = "hand-thin-slice-run-$env:GITHUB_RUN_ID.json"
+          git config user.name "BIMO"
+          git config user.email "bimo@yassinsmr.local"
+          git fetch origin spike-results
+          git checkout spike-results
+          Copy-Item "$env:SLICE_DIR\slice-results.json" $resultsName
+          git add $resultsName
+          git commit -m "slice run $env:GITHUB_RUN_ID: verdict $verdict" --allow-empty
+          git push origin spike-results
+          Write-Host "S8: slice-results.json pushed as $resultsName (verdict=$verdict)"
+
+      - name: Upload slice results + raw logs (mandatory)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hand-thin-slice-run-${{ github.run_id }}
+          path: |
+            ${{ env.SLICE_DIR }}\slice-results.json
+            ${{ env.SLICE_DIR }}\hand-slice.json
+            ${{ env.SLICE_DIR }}\slice-inputs.json
+            ${{ env.SLICE_DIR }}\slice-window.json
+            ${{ env.SLICE_DIR }}\witness.json
+            ${{ env.SLICE_DIR }}\shot-check.json
+            ${{ env.SLICE_DIR }}\s6.json
+            ${{ env.SLICE_DIR }}\s7.json
+            ${{ env.EYE_DATA }}\eye-events.jsonl
+            ${{ env.SLICE_DIR }}\eye-stdout.log
+            ${{ env.SLICE_DIR }}\eye-stderr.log
+          if-no-files-found: warn
+
+      - name: Slice verdict gate
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:SLICE_VERDICT -ne "pass") { throw "slice verdict: $($env:SLICE_VERDICT)" }
+          Write-Host "slice verdict: pass"
