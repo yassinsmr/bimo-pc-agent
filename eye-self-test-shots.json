@@ -47,7 +47,7 @@
       "status": "pass"
     },
     {
-      "detail": "229 lines verified",
+      "detail": "232 lines verified",
       "name": "hash chain valid",
       "status": "pass"
     },
@@ -82,7 +82,7 @@
       "status": "pass"
     },
     {
-      "detail": "229 events checked",
+      "detail": "232 events checked",
       "name": "every log line carries schema 1",
       "status": "pass"
     },
@@ -148,7 +148,7 @@
     }
   ],
   "crypto": "plain",
-  "events_total": 229,
+  "events_total": 232,
   "honest_limits": [
     "runner numbers do not prove device performance (flawhunt 11-z)",
     "no real fullscreen game on the runner; game capture is decided on the Legion (second gate)",
@@ -158,9 +158,9 @@
     "crypto is plain: explicit opt-in BIMO_EYE_PLAINTEXT_OK=1 recorded in the log (council condition 2); DPAPI stays an arrival-day item"
   ],
   "resources": {
-    "cpu_seconds": 0.34375,
-    "elapsed_seconds": 67.1419008,
-    "rss_kb": 21908
+    "cpu_seconds": 0.3125,
+    "elapsed_seconds": 67.0554972,
+    "rss_kb": 21940
   },
   "verdict": "pass"
 }
