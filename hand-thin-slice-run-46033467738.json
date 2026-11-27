@@ -1,0 +1,119 @@
+{
+  "s6": null,
+  "slice_id": "slice-46033467738",
+  "slice_inputs": null,
+  "run_id": "46033467738",
+  "hand_slice": null,
+  "m5_note": "does not prove eye survival outside a live step nor device performance",
+  "eye_witness": null,
+  "timeout_check": {
+    "margin_secs": 330.0,
+    "fits": true,
+    "job_timeout_secs": 2700,
+    "worst_case_secs": 2370.0,
+    "budget": [
+      {
+        "secs": 90,
+        "item": "arm + S0c probe"
+      },
+      {
+        "secs": 600,
+        "item": "S1 fetch (5 x curl --max-time 120)"
+      },
+      {
+        "secs": 120,
+        "item": "S1 GPG + Authenticode + COM"
+      },
+      {
+        "secs": 600,
+        "item": "Phase 1 install (S2+S3)"
+      },
+      {
+        "secs": 180,
+        "item": "S6 + S4 + S5"
+      },
+      {
+        "secs": 600,
+        "item": "S7 revert"
+      },
+      {
+        "secs": 180,
+        "item": "stop eye + S8 assemble/publish"
+      }
+    ],
+    "live_step_timeout_minutes": 40
+  },
+  "eye_exit": {
+    "alive_before_stop": true,
+    "exited_on_stop": true,
+    "pid": 9068,
+    "killed_by_stop": false,
+    "exit_code": 0,
+    "lifetime": "6.1 s"
+  },
+  "checkpoints": [
+    {
+      "note": "enter",
+      "phase": "S0",
+      "ts": "2026-11-27T16:27:32.4338019+00:00"
+    },
+    {
+      "note": "enter",
+      "phase": "S0b",
+      "ts": "2026-11-27T16:27:32.7365306+00:00"
+    },
+    {
+      "note": "enter",
+      "phase": "S0c",
+      "ts": "2026-11-27T16:27:33.2950601+00:00"
+    },
+    {
+      "note": "enter",
+      "phase": "S1",
+      "ts": "2026-11-27T16:27:35.4855105+00:00"
+    },
+    {
+      "note": "enter-finally",
+      "phase": "S7",
+      "ts": "2026-11-27T16:27:37.6537617+00:00"
+    },
+    {
+      "note": "enter-finally",
+      "phase": "StopEye",
+      "ts": "2026-11-27T16:27:37.6561866+00:00"
+    },
+    {
+      "note": "enter-finally",
+      "phase": "S8",
+      "ts": "2026-11-27T16:27:38.8169293+00:00"
+    }
+  ],
+  "restructure_note": "single-live-step restructure built on one unreplicated positive control (diagnostic run (a)); a slice-3 success must not be read back as proof that run (a) replicates",
+  "slice_window": {
+    "product_dir_expected": "C:\\bimo-slice\\Notepad++",
+    "arm_ts": "2026-11-27T16:27:33.284502+00:00",
+    "s6_ts": null,
+    "slice_id": "slice-46033467738",
+    "product_code": null,
+    "s3_ts": null,
+    "msi_sha256": "e3b0607a092ce2604fbdac027db2c94915995e8e568ebd226f8c5493c2f61a80",
+    "install_location_expected": "C:\\bimo-slice\\Notepad++",
+    "probe_prefix": "C:\\bimo-slice\\bimo-slice-probe-slice-46033467738",
+    "window_end_ts": null
+  },
+  "s7": {
+    "revert": null,
+    "clean": null,
+    "status": "skipped",
+    "reason": "s3-not-succeeded"
+  },
+  "s1_note": "S1 did not complete (slice-inputs.json missing)",
+  "runner_note": "does not prove device performance",
+  "verdict": "fail",
+  "reasons": [
+    "live-step-phase-error: S1 fail: keyserver key import failed",
+    "hand-slice-missing (phase 1 never ran — failure before the install phase)",
+    "shot-missing (R6)"
+  ],
+  "shot_check": null
+}
