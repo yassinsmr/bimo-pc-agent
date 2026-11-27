@@ -213,11 +213,6 @@ pub fn prepare_execution(
     if (cmd.needs_approval || cmd.kind == "organize") && !cmd.approved {
         return Err("needs_approval".to_string());
     }
-    // Installers are narrowed to the single allowed class (see the crate README for the class and its fingerprint).
-    // Any other install/msi command needs approval first; an approved command still passes.
-    if cmd.kind == "install" && cmd.args.get("msi").is_some() && !cmd.approved && !msi_class_allowed(cmd) {
-        return Err("needs_approval".to_string());
-    }
     // Disk-space check before any download/install (re-checked at start
     // by the supervisor, which sees the same rule).
     if let Some(size) = cmd.args.get("size_bytes").and_then(|v| v.as_u64()) {
@@ -239,6 +234,11 @@ pub fn prepare_execution(
         .or_else(|| cmd.args.get("msi").and_then(|v| v.as_str()));
     if let Some(target) = target {
         guardian.gate(Path::new(target))?;
+    }
+    // Installers are narrowed to the single allowed class (see the crate README for the class and its fingerprint).
+    // Any other install/msi command needs approval first; an approved command still passes.
+    if cmd.kind == "install" && cmd.args.get("msi").is_some() && !cmd.approved && !msi_class_allowed(cmd) {
+        return Err("needs_approval".to_string());
     }
     // Idempotency: the result already exists — done, without executing.
     if let Some(marker) = cmd.args.get("idempotency_path").and_then(|v| v.as_str()) {
@@ -406,10 +406,12 @@ mod tests {
 fn install_outside_allowed_msi_class_needs_approval() {
     let dir = std::env::temp_dir().join("bimo-hand-exec-test");
     let _ = fs::create_dir_all(&dir);
+    let msi_path = dir.join("example.msi");
+    let _ = fs::write(&msi_path, b"dummy");
     let mut config = HandConfig::default();
     config.exec_enabled = true;
     config.data_dir = dir.clone();
-    let cmd = new_command("m1", "install", json!({"msi": "C:\\Temp\\example.msi", "name_substring": "Example Installer"}), 3600, json!({}));
+    let cmd = new_command("m1", "install", json!({"msi": msi_path.to_string_lossy().to_string(), "name_substring": "Example Installer"}), 3600, json!({}));
     let err = prepare_execution(&cmd, &config, &Guardian::default()).unwrap_err();
     assert_eq!(err, "needs_approval");
     let _ = fs::remove_dir_all(&dir);
