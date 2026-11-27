@@ -1,0 +1,34 @@
+{
+  "eye_witness": null,
+  "s7": {
+    "revert": null,
+    "clean": null,
+    "reason": "s3-not-succeeded",
+    "status": "skipped"
+  },
+  "verdict": "fail",
+  "slice_window": {
+    "s3_ts": null,
+    "product_dir_expected": "C:\\bimo-slice\\Notepad++",
+    "product_code": null,
+    "s6_ts": null,
+    "install_location_expected": "C:\\bimo-slice\\Notepad++",
+    "arm_ts": "2026-11-27T12:12:13.6201708+00:00",
+    "msi_sha256": "e3b0607a092ce2604fbdac027db2c94915995e8e568ebd226f8c5493c2f61a80",
+    "probe_prefix": "C:\\bimo-slice\\bimo-slice-probe-slice-45996373922",
+    "slice_id": "slice-45996373922",
+    "window_end_ts": null
+  },
+  "s6": null,
+  "runner_note": "does not prove device performance",
+  "shot_check": null,
+  "hand_slice": null,
+  "slice_id": "slice-45996373922",
+  "slice_inputs": null,
+  "reasons": [
+    "hand-slice-missing (phase 1 never ran — failure before the install phase)",
+    "shot-missing (R6)"
+  ],
+  "run_id": "45996373922",
+  "s1_note": "S1 did not complete (slice-inputs.json missing)"
+}
