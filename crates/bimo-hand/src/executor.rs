@@ -309,7 +309,7 @@ pub fn prepare_execution(
             let verb = if uninstall { "/x" } else { "/i" };
             // Slice opt-in (§28.2 (a)): TARGETDIR is appended ONLY when
             // the command sets args.targetdir=true. Never by default:
-            // 8.1's VLC command carries install_dir too, and silently
+            // 8.1's proof command carries install_dir too, and silently
             // redirecting it would change a proven proof.
             let targetdir = if cmd.args.get("targetdir").and_then(|v| v.as_bool()).unwrap_or(false) {
                 cmd.args.get("install_dir").and_then(|v| v.as_str()).map(|s| s.to_string())
