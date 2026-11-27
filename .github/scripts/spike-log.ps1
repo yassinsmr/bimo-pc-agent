@@ -54,3 +54,32 @@ function Wait-EyeEventMs {
   }
   return $null
 }
+
+# F3/F4 (council fix, run 2): the LOUD readability probe. Unlike
+# Read-EyeLog (a polling helper that silently returns @() while the
+# file is still appearing), this throws when the log file is missing
+# and otherwise reports counts, so a run can never again mistake an
+# unreadable log for a quiet tree. Returns a hashtable:
+# @{ exists; total_lines; json_lines; has_agent_start }.
+function Test-EyeLogReadable {
+  param([string]$Path)
+  if (-not (Test-Path $Path)) {
+    throw "eye log missing: $Path"
+  }
+  $total = 0; $json = 0; $hasStart = $false
+  try {
+    $lines = [System.IO.File]::ReadAllLines($Path)
+  } catch {
+    throw "eye log unreadable: $Path ($($_.Exception.Message))"
+  }
+  foreach ($line in $lines) {
+    if ([string]::IsNullOrWhiteSpace($line)) { continue }
+    $total++
+    try {
+      $ev = ($line | ConvertFrom-Json)
+      $json++
+      if ($ev.type -eq "agent.start") { $hasStart = $true }
+    } catch {}
+  }
+  return @{ exists = $true; total_lines = $total; json_lines = $json; has_agent_start = $hasStart }
+}

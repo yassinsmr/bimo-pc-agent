@@ -31,6 +31,17 @@
 #   for the file and calls handle.stop()); the stop step force-kills
 #   only after a 30 s grace, as a safety net.
 #
+# UPDATED (council, 2026-11-27, run 2 verdict fail): the council ruled
+# (ب) — harness fix + ONE re-run. Run 2 failed T1+T3 with a fully
+# silent eye (nulls everywhere, T2 noise 0) and a confirmed `$pid`
+# bug in the stop step; the run could not discriminate dead-eye /
+# unreadable-log / blind-watcher. Fixes in this version: F1 `$eyePid`
+# + persisted PID file; F2 liveness probe; F3 readability probe
+# (Test-EyeLogReadable, loud on missing log); F4/F5 in the results;
+# arm + T2 + T1 + T3 merged into ONE PowerShell session (the prime
+# suspect is death at step boundaries). A second fail with green
+# probes = final capability verdict, no third run.
+#
 # Results go to the `spike-results` branch as
 # hand-thin-slice-spike-results.json (a distinct name: the eye spike
 # already owns spike-results.json there — never clobber it).
@@ -77,10 +88,22 @@ jobs:
         run: |
           cargo test --release --target x86_64-pc-windows-msvc --locked -p bimo-eye
 
-      - name: Arm eye --watch on Program Files
+      - name: Arm + T2 + T1 + T3 (single session)
+        # COUNCIL (c54) — one step on purpose: the prime suspect in run 2
+        # is the eye process dying AT STEP BOUNDARIES, so arming, the
+        # liveness/readability probes (F2/F3) and the T1/T3 stimuli must
+        # share ONE PowerShell session. A probe in an earlier step proves
+        # nothing about survival into a later step.
+        # F2 (liveness): eye process alive + heartbeat.json fresh <10 s.
+        # F3 (readability): eye-events.jsonl exists, has JSON lines and
+        # an agent.start line; the RESOLVED log path is printed.
+        # A failed gate writes its named cause (eye-dead / log-unreadable)
+        # into probes.json and fail fragments for T1/T2/T3, then exits 1.
         shell: pwsh
+        continue-on-error: true
         run: |
-          $ErrorActionPreference = "Stop"
+          $ErrorActionPreference = "Continue"
+          . $env:GITHUB_WORKSPACE\.github\scripts\spike-log.ps1
           # NOTE: the `runner` context is NOT available in workflow-
           # or job-level `env` (run 1 failed validation on exactly
           # that), so the temp paths are computed here from the
@@ -93,6 +116,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path $env:EYE_DATA | Out-Null
           $sliceId = "spike-$env:GITHUB_RUN_ID"
           $sliceId | Out-File -FilePath "$env:SPIKE_DIR\slice-id.txt" -Encoding utf8
+          $logPath = "$env:EYE_DATA\eye-events.jsonl"
+          Write-Host "resolved eye log path: $logPath"
           # Plaintext log is REQUIRED for the PowerShell witness checks
           # below (see workflow header); the opt-in is recorded in the
           # eye log itself.
@@ -104,7 +129,8 @@ jobs:
             "--snapshot-secs", "1", "--heartbeat-secs", "2",
             "--max-secs", "1200"
           ) -WindowStyle Hidden -PassThru -RedirectStandardOutput "$env:SPIKE_DIR\eye-stdout.log" -RedirectStandardError "$env:SPIKE_DIR\eye-stderr.log"
-          $proc.Id | Out-File -FilePath "$env:SPIKE_DIR\eye-pid.txt" -Encoding utf8
+          $eyePid = $proc.Id
+          $eyePid | Out-File -FilePath "$env:SPIKE_DIR\eye-pid.txt" -Encoding utf8
           # Wait for a FRESH heartbeat (< 10 s old, spec S0b).
           $deadline = (Get-Date).AddSeconds(30)
           $armed = $false
@@ -119,18 +145,56 @@ jobs:
           }
           if (-not $armed) { throw "arm failed: no fresh heartbeat.json within 30 s" }
           # arm_ts: the T2 observation window starts HERE (§36.1).
-          [DateTimeOffset]::UtcNow.ToString("o") | Out-File -FilePath "$env:SPIKE_DIR\arm-ts.txt" -Encoding utf8
-          Write-Host "eye armed, pid $($proc.Id), arm_ts $(Get-Content "$env:SPIKE_DIR\arm-ts.txt")"
-
-      - name: T2 noise observation (60 s)
-        shell: pwsh
-        continue-on-error: true
-        run: |
-          $ErrorActionPreference = "Continue"
-          . $env:GITHUB_WORKSPACE\.github\scripts\spike-log.ps1
+          $armTs = [DateTimeOffset]::UtcNow
+          $armTs.ToString("o") | Out-File -FilePath "$env:SPIKE_DIR\arm-ts.txt" -Encoding utf8
+          Write-Host "eye armed, pid $eyePid, arm_ts $($armTs.ToString('o'))"
+          # --- F2 liveness probe (named gate before any threshold) ---
+          $hbAge = $null
+          $hbFile = "$env:EYE_DATA\heartbeat.json"
+          if (Test-Path $hbFile) {
+            $hbTs = (Get-Content $hbFile -Raw | ConvertFrom-Json).ts
+            $hbAge = [int]([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse($hbTs)).TotalSeconds
+          }
+          $alive = $null -ne (Get-Process -Id $eyePid -ErrorAction SilentlyContinue)
+          $probes = @{ f2_alive = $alive; f2_heartbeat_age_secs = $hbAge; f2_status = "pass" }
+          if (-not $alive -or $null -eq $hbAge -or $hbAge -ge 10) {
+            $probes.f2_status = "fail"
+            $probes | ConvertTo-Json | Out-File -FilePath "$env:SPIKE_DIR\probes.json" -Encoding utf8
+            @{ threshold = "T1"; status = "fail"; reason = "eye-dead"; completed_ms = $null; detected_ms = $null; limit_ms = 10000 } | ConvertTo-Json | Out-File -FilePath "$env:SPIKE_DIR\t1.json" -Encoding utf8
+            @{ threshold = "T2"; status = "fail"; reason = "eye-dead"; noise_count = $null; limit = 50; window_secs = 60 } | ConvertTo-Json | Out-File -FilePath "$env:SPIKE_DIR\t2.json" -Encoding utf8
+            @{ threshold = "T3"; status = "fail"; reason = "eye-dead"; first_seen = $false; renamed_ms = $null; limit_ms = 30000 } | ConvertTo-Json | Out-File -FilePath "$env:SPIKE_DIR\t3.json" -Encoding utf8
+            Write-Host "F2 FAIL: eye-dead (alive=$alive heartbeat_age=${hbAge}s)"
+            exit 1
+          }
+          Write-Host "F2 pass: eye alive (pid $eyePid), heartbeat ${hbAge}s old"
+          # --- F3 readability probe (named gate, loud on missing log) ---
+          # Test-EyeLogReadable THROWS on a missing/unreadable file, so
+          # catch it here: the gate below must still write the named
+          # fail fragments (log-unreadable) instead of dying silently.
+          $read = $null
+          try { $read = Test-EyeLogReadable -Path $logPath } catch {
+            $read = @{ exists = $false; total_lines = 0; json_lines = 0; has_agent_start = $false }
+            Write-Host "F3 probe threw: $($_.Exception.Message)"
+          }
+          $probes.f3_total_lines = $read.total_lines
+          $probes.f3_json_lines = $read.json_lines
+          $probes.f3_has_agent_start = $read.has_agent_start
+          $probes.f3_log_path = $logPath
+          $probes.f3_status = "pass"
+          if (-not $read.exists -or $read.json_lines -eq 0 -or -not $read.has_agent_start) {
+            $probes.f3_status = "fail"
+            $probes | ConvertTo-Json | Out-File -FilePath "$env:SPIKE_DIR\probes.json" -Encoding utf8
+            @{ threshold = "T1"; status = "fail"; reason = "log-unreadable"; completed_ms = $null; detected_ms = $null; limit_ms = 10000 } | ConvertTo-Json | Out-File -FilePath "$env:SPIKE_DIR\t1.json" -Encoding utf8
+            @{ threshold = "T2"; status = "fail"; reason = "log-unreadable"; noise_count = $null; limit = 50; window_secs = 60 } | ConvertTo-Json | Out-File -FilePath "$env:SPIKE_DIR\t2.json" -Encoding utf8
+            @{ threshold = "T3"; status = "fail"; reason = "log-unreadable"; first_seen = $false; renamed_ms = $null; limit_ms = 30000 } | ConvertTo-Json | Out-File -FilePath "$env:SPIKE_DIR\t3.json" -Encoding utf8
+            Write-Host "F3 FAIL: log-unreadable (exists=$($read.exists) total=$($read.total_lines) json=$($read.json_lines) agent_start=$($read.has_agent_start))"
+            exit 1
+          }
+          Write-Host "F3 pass: log readable ($($read.json_lines)/$($read.total_lines) JSON lines, agent.start present)"
+          $probes | ConvertTo-Json | Out-File -FilePath "$env:SPIKE_DIR\probes.json" -Encoding utf8
+          # --- T2 noise observation (60 s) ---
           Start-Sleep -Seconds 60
-          $armTs = [DateTimeOffset]::Parse((Get-Content "$env:SPIKE_DIR\arm-ts.txt" -Raw).Trim())
-          $events = Read-EyeLog -Path "$env:EYE_DATA\eye-events.jsonl"
+          $events = Read-EyeLog -Path $logPath
           $noise = @($events | Where-Object {
             $_.type -eq "file.completed" -and
             $_.path -like "C:\Program Files\*" -and
@@ -138,27 +202,20 @@ jobs:
             $_.path -notlike "$env:PRODUCT_DIR*" -and
             ([DateTimeOffset]::Parse($_.ts) -ge $armTs)
           })
-          $status = if ($noise.Count -le 50) { "pass" } else { "fail" }
-          @{ threshold = "T2"; status = $status; noise_count = $noise.Count; limit = 50; window_secs = 60 } | ConvertTo-Json | Out-File -FilePath "$env:SPIKE_DIR\t2.json" -Encoding utf8
-          Write-Host "T2 $status : $($noise.Count) noise events (limit 50)"
-          if ($status -eq "fail") { exit 1 }
-
-      - name: T1 probe file appears (<= 10 s)
-        shell: pwsh
-        continue-on-error: true
-        run: |
-          $ErrorActionPreference = "Continue"
-          . $env:GITHUB_WORKSPACE\.github\scripts\spike-log.ps1
-          $sliceId = (Get-Content "$env:SPIKE_DIR\slice-id.txt" -Raw).Trim()
+          $t2status = if ($noise.Count -le 50) { "pass" } else { "fail" }
+          @{ threshold = "T2"; status = $t2status; noise_count = $noise.Count; limit = 50; window_secs = 60 } | ConvertTo-Json | Out-File -FilePath "$env:SPIKE_DIR\t2.json" -Encoding utf8
+          Write-Host "T2 $t2status : $($noise.Count) noise events (limit 50)"
+          # --- T1 probe file appears (<= 10 s) ---
           $probeDir = "$env:PROBE_PREFIX$sliceId"
           New-Item -ItemType Directory -Force -Path $probeDir | Out-Null
           $probeExe = Join-Path $probeDir "probe.exe"
           $t0 = [DateTimeOffset]::UtcNow
           New-Item -ItemType File -Force -Path $probeExe | Out-Null
+          $probeExists = Test-Path $probeExe
           $completedMs = $null; $detectedMs = $null
           $deadline = (Get-Date).AddSeconds(10)
           while ((Get-Date) -lt $deadline) {
-            $events = Read-EyeLog -Path "$env:EYE_DATA\eye-events.jsonl"
+            $events = Read-EyeLog -Path $logPath
             if ($null -eq $completedMs) {
               $e = @($events | Where-Object { $_.type -eq "file.completed" -and $_.path -eq $probeExe })
               if ($e.Count -gt 0) { $completedMs = [int]([DateTimeOffset]::UtcNow - $t0).TotalMilliseconds }
@@ -170,37 +227,30 @@ jobs:
             if ($null -ne $completedMs -and $null -ne $detectedMs) { break }
             Start-Sleep -Milliseconds 500
           }
-          $status = if ($null -ne $completedMs -and $null -ne $detectedMs) { "pass" } else { "fail" }
-          @{ threshold = "T1"; status = $status; completed_ms = $completedMs; detected_ms = $detectedMs; limit_ms = 10000; probe = $probeExe } | ConvertTo-Json | Out-File -FilePath "$env:SPIKE_DIR\t1.json" -Encoding utf8
-          Write-Host "T1 $status : completed=${completedMs}ms detected=${detectedMs}ms (limit 10000ms)"
+          $t1status = if ($null -ne $completedMs -and $null -ne $detectedMs) { "pass" } else { "fail" }
+          @{ threshold = "T1"; status = $t1status; completed_ms = $completedMs; detected_ms = $detectedMs; limit_ms = 10000; probe = $probeExe; probe_exists_independent = $probeExists } | ConvertTo-Json | Out-File -FilePath "$env:SPIKE_DIR\t1.json" -Encoding utf8
+          Write-Host "T1 $t1status : completed=${completedMs}ms detected=${detectedMs}ms (limit 10000ms) probe_exists=$probeExists"
           Remove-Item -Recurse -Force $probeDir -ErrorAction SilentlyContinue
-          if ($status -eq "fail") { exit 1 }
-
-      - name: T3 rename is reported (<= 30 s)
-        shell: pwsh
-        continue-on-error: true
-        run: |
-          $ErrorActionPreference = "Continue"
-          . $env:GITHUB_WORKSPACE\.github\scripts\spike-log.ps1
-          $sliceId = (Get-Content "$env:SPIKE_DIR\slice-id.txt" -Raw).Trim()
-          $probeDir = "$env:PROBE_PREFIX$sliceId"
+          # --- T3 rename is reported (<= 30 s) ---
           New-Item -ItemType Directory -Force -Path $probeDir | Out-Null
           $a = Join-Path $probeDir "probe-rename-a.exe"
           $b = Join-Path $probeDir "probe-rename-b.exe"
           New-Item -ItemType File -Force -Path $a | Out-Null
-          # First completion (same probe latency budget as T1: 10 s).
-          $seenA = Wait-EyeEvent -Path "$env:EYE_DATA\eye-events.jsonl" -Type "file.completed" -ExactPath $a -TimeoutSecs 10
+          $seenA = Wait-EyeEvent -Path $logPath -Type "file.completed" -ExactPath $a -TimeoutSecs 10
           $renamedMs = $null
           if ($seenA) {
             $t0 = [DateTimeOffset]::UtcNow
             Rename-Item -Path $a -NewName "probe-rename-b.exe"
-            $renamedMs = Wait-EyeEventMs -Path "$env:EYE_DATA\eye-events.jsonl" -Type "file.completed" -ExactPath $b -TimeoutSecs 30 -Since $t0
+            $renamedExists = Test-Path $b
+            $renamedMs = Wait-EyeEventMs -Path $logPath -Type "file.completed" -ExactPath $b -TimeoutSecs 30 -Since $t0
+          } else {
+            $renamedExists = $false
           }
-          $status = if ($null -ne $renamedMs) { "pass" } else { "fail" }
-          @{ threshold = "T3"; status = $status; first_seen = $seenA; renamed_ms = $renamedMs; limit_ms = 30000 } | ConvertTo-Json | Out-File -FilePath "$env:SPIKE_DIR\t3.json" -Encoding utf8
-          Write-Host "T3 $status : first_seen=$seenA renamed_ms=${renamedMs} (limit 30000ms)"
+          $t3status = if ($null -ne $renamedMs) { "pass" } else { "fail" }
+          @{ threshold = "T3"; status = $t3status; first_seen = $seenA; renamed_ms = $renamedMs; limit_ms = 30000; renamed_exists_independent = $renamedExists } | ConvertTo-Json | Out-File -FilePath "$env:SPIKE_DIR\t3.json" -Encoding utf8
+          Write-Host "T3 $t3status : first_seen=$seenA renamed_ms=${renamedMs} (limit 30000ms) renamed_exists=$renamedExists"
           Remove-Item -Recurse -Force $probeDir -ErrorAction SilentlyContinue
-          if ($status -eq "fail") { exit 1 }
+          if ($t2status -eq "fail" -or $t1status -eq "fail" -or $t3status -eq "fail") { exit 1 }
 
       - name: T4 gpg + T5 elevation (recorded)
         shell: pwsh
@@ -283,16 +333,19 @@ jobs:
         if: always()
         run: |
           $ErrorActionPreference = "Continue"
-          $pid = (Get-Content "$env:SPIKE_DIR\eye-pid.txt" -Raw).Trim()
+          # F1 (council fix): $pid is a read-only automatic variable in
+          # PowerShell — run 2 died here before writing eye.stop.
+          # The PID survives across steps only via the persisted file.
+          $eyePid = (Get-Content "$env:SPIKE_DIR\eye-pid.txt" -Raw).Trim()
           "stop" | Out-File -FilePath "$env:EYE_DATA\eye.stop" -Encoding utf8
           # The eye exits by itself on eye.stop; force-kill only after grace.
-          $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+          $proc = Get-Process -Id $eyePid -ErrorAction SilentlyContinue
           $how = "eye.stop"
-          if ($null -ne $proc) {
-            if (-not $proc.WaitForExit(30000)) {
-              Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
-              $how = "force-killed"
-            }
+          if ($null -eq $proc) {
+            $how = "already-gone"
+          } elseif (-not $proc.WaitForExit(30000)) {
+            Stop-Process -Id $eyePid -Force -ErrorAction SilentlyContinue
+            $how = "force-killed"
           }
           @{ stop = $how } | ConvertTo-Json | Out-File -FilePath "$env:SPIKE_DIR\stop.json" -Encoding utf8
           Write-Host "eye stopped via $how"
@@ -309,7 +362,7 @@ jobs:
           }
           $t1 = Read-Frag "t1.json"; $t2 = Read-Frag "t2.json"; $t3 = Read-Frag "t3.json"
           $t4 = Read-Frag "t4.json"; $t5 = Read-Frag "t5.json"; $t6 = Read-Frag "t6.json"
-          $l1 = Read-Frag "l1.json"; $stop = Read-Frag "stop.json"
+          $l1 = Read-Frag "l1.json"; $stop = Read-Frag "stop.json"; $probes = Read-Frag "probes.json"
           $missing = @()
           foreach ($pair in @(("T1",$t1),("T2",$t2),("T3",$t3),("T4",$t4),("T6",$t6))) {
             if ($null -eq $pair[1]) { $missing += $pair[0] }
@@ -322,7 +375,7 @@ jobs:
             ts = [DateTimeOffset]::UtcNow.ToString("o")
             thresholds = @{ T1 = $t1; T2 = $t2; T3 = $t3; T4 = $t4; T5 = $t5; T6 = $t6 }
             L1 = $l1
-            eye = @{ stop = ($stop.stop) }
+            eye = @{ stop = ($stop.stop); probes = $probes }
             missing_fragments = $missing
             notes = @(
               "runner numbers do not prove device performance (flawhunt 11-z)",
