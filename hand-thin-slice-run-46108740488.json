@@ -1,0 +1,464 @@
+{
+  "eye_exit": {
+    "exit_code": 0,
+    "alive_before_stop": true,
+    "pid": 4184,
+    "killed_by_stop": false,
+    "lifetime": "24.1 s",
+    "exited_on_stop": true
+  },
+  "eye_witness": {
+    "last_raw_file_event_ts": "2026-11-28T04:44:00+00:00",
+    "reason": null,
+    "s4_read_ts": "2026-11-28T04:44:04.254356+00:00",
+    "status": "pass",
+    "window": [
+      "2026-11-28T04:43:44+00:00",
+      "2026-11-28T04:44:28+00:00"
+    ],
+    "settle_cap_hit": false,
+    "hits": 4,
+    "settle_decision_ts": "2026-11-28T04:44:04.2470647+00:00",
+    "settle_start_ts": "2026-11-28T04:43:58.3240888+00:00",
+    "eye_alive": true
+  },
+  "slice_window": {
+    "probe_prefix": "C:\\bimo-slice\\bimo-slice-probe-slice-46108740488",
+    "slice_id": "slice-46108740488",
+    "window_end_ts": "2026-11-28T04:44:28.3139629+00:00",
+    "s3_ts": "2026-11-28T04:43:55+00:00",
+    "arm_ts": "2026-11-28T04:43:44.5794147+00:00",
+    "product_dir_expected": "C:\\bimo-slice\\Notepad++",
+    "s6_ts": "2026-11-28T04:43:58.3133693+00:00",
+    "install_location_expected": "C:\\bimo-slice\\Notepad++",
+    "product_code": "{A23B657D-838B-4C9B-8F9D-386E50C1A76B}",
+    "msi_sha256": "e3b0607a092ce2604fbdac027db2c94915995e8e568ebd226f8c5493c2f61a80"
+  },
+  "timeout_check": {
+    "fits": true,
+    "margin_secs": 210.0,
+    "budget": [
+      {
+        "secs": 90,
+        "item": "arm + S0c probe"
+      },
+      {
+        "secs": 600,
+        "item": "S1 fetch (5 x curl --max-time 120)"
+      },
+      {
+        "secs": 120,
+        "item": "S1 GPG + Authenticode + P/Invoke"
+      },
+      {
+        "secs": 600,
+        "item": "Phase 1 install (S2+S3)"
+      },
+      {
+        "secs": 60,
+        "item": "S-DIAG capture (listing + registry + MSI log)"
+      },
+      {
+        "secs": 240,
+        "item": "S6 + S4 + S5 (incl. S4 settle cap 30 s, council 25; cycle 71 stress: +30 s injector-job wait)"
+      },
+      {
+        "secs": 600,
+        "item": "S7 revert"
+      },
+      {
+        "secs": 180,
+        "item": "stop eye + S8 assemble/publish"
+      }
+    ],
+    "job_timeout_secs": 2700,
+    "live_step_timeout_minutes": 42,
+    "worst_case_secs": 2490.0
+  },
+  "restructure_note": "single-live-step restructure built on one unreplicated positive control (diagnostic run (a)); a slice-3 success must not be read back as proof that run (a) replicates",
+  "s7": {
+    "reason": "fail-revert-failed: not clean after revert",
+    "revert_exit": 0,
+    "clean": {
+      "clean": false,
+      "product_absent": true,
+      "install_dir_absent": false,
+      "start_menu_absent": true,
+      "uninstall_key_absent": true
+    },
+    "status": "fail"
+  },
+  "run_id": "46108740488",
+  "m5_note": "does not prove eye survival outside a live step nor device performance",
+  "s6": {
+    "exe_present": true,
+    "exe_path": "C:\\bimo-slice\\Notepad++\\notepad++.exe",
+    "reason": null,
+    "product_state": 5,
+    "status": "pass",
+    "install_location": ""
+  },
+  "s1_gpg": {
+    "keyserver_import_stderr_attempts": [
+      "gpg: keybox '/c/gpg-home/pubring.kbx' created\r\ngpg: key 6C429F1D8D84F46E: 74 signatures not checked due to missing keys\r\ngpg: /c/gpg-home/trustdb.gpg: trustdb created\r\ngpg: key 6C429F1D8D84F46E: public key \"Notepad++ <don.h@free.fr>\" imported\r\ngpg: Total number processed: 1\r\ngpg:               imported: 1\r\ngpg: no ultimately trusted keys found\r\n"
+    ],
+    "npp_import_stderr": "gpg: key 6C429F1D8D84F46E: 56 signatures not checked due to missing keys\r\ngpg: key 6C429F1D8D84F46E: \"Notepad++ <don.h@free.fr>\" not changed\r\ngpg: Total number processed: 1\r\ngpg:              unchanged: 1\r\n",
+    "keyserver_import_attempt": 1,
+    "mechanism_note": "F3: a success after a retry does not close the S1 mechanism question — it stays open and carried in the log",
+    "gpg_version_first_line": "gpg (GnuPG) 2.4.9",
+    "gnupghome": "/c/gpg-home"
+  },
+  "shot_check": {
+    "unit": "bimo-shot",
+    "verdict": "pass",
+    "ts_unix": 1795841044,
+    "perf_tag": "runner-only — does not prove device performance",
+    "checks": {
+      "rate-limiter": {
+        "status": "pass",
+        "details": {
+          "burst_7_in_1s": {
+            "allowed": 5,
+            "refused": 2
+          },
+          "one_per_min_x5_all_allowed": true,
+          "rule": "5 per rolling 10 s (§6)"
+        }
+      },
+      "one-shot": {
+        "status": "pass",
+        "details": {
+          "file": "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\bimo-shot-test-1795841044\\shots\\shot-000001.jpg.dpapi",
+          "width": 1024,
+          "height": 768,
+          "bytes": 253878,
+          "quality": "80",
+          "cold": true,
+          "wait_ms": 164,
+          "encode_ms": 15,
+          "jpeg_magic_ok": true,
+          "sof_dimensions_match": true,
+          "width_le_1920": true,
+          "encrypted_name": true,
+          "raw_not_jpeg": true,
+          "note": "one frame from the persistent session; quality 80 + max width 1920 via WIC (or wic-default-fallback, recorded)"
+        }
+      }
+    },
+    "honest_limits": "capture over a real exclusive-fullscreen game is NOT tested here (second gate, on the Legion); JPEG dimensions are parsed independently from the SOF marker"
+  },
+  "s1_note": "four checks passed in the S1 step (hash, GPG, Authenticode, winget)",
+  "slice_id": "slice-46108740488",
+  "verdict": "fail",
+  "stress_verdict": {
+    "reason": "stress-inconclusive: slice verdict is fail (stress run invalid as a stress test)",
+    "evidence": {
+      "eye_saw_injected": null,
+      "last_raw_file_event_ts": null,
+      "inject_path": null,
+      "settle_cap_hit": null,
+      "quiet_after_inject_secs": null,
+      "inject_ts": null,
+      "settle_decision_ts": null,
+      "injected": false,
+      "eye_injected_event_ts": null
+    },
+    "status": "inconclusive"
+  },
+  "hand_slice": {
+    "command_id": "slice-npp-001",
+    "hand_evidence": {
+      "folder_after": true,
+      "folder_before": false,
+      "product_state_after": 5,
+      "product_state_before": -1
+    },
+    "negative_hash_tests": {
+      "a": {
+        "expected": "sha256-mismatch",
+        "got": "sha256-mismatch",
+        "name": "8.12a",
+        "pass": true,
+        "request_file_written": false
+      },
+      "b": {
+        "expected": "sha256-mismatch",
+        "got": "sha256-mismatch",
+        "name": "8.12b",
+        "pass": true,
+        "request_file_written": false
+      },
+      "c": {
+        "expected": "sha256-required",
+        "got": "sha256-required",
+        "name": "8.12c",
+        "pass": true,
+        "request_file_written": false
+      }
+    },
+    "probe_8_12d": {
+      "exec_started_seen": false,
+      "product_state_after": -1,
+      "reason": "sha256-required",
+      "revert": {
+        "ran": false,
+        "result": null
+      },
+      "status": "pass",
+      "stop_resumed": false,
+      "waited_ms": 1001
+    },
+    "probe_8_12e": {
+      "cases": {
+        "e1": {
+          "expected": "needs_approval",
+          "got": "needs_approval",
+          "name": "8.12e",
+          "pass": true,
+          "request_file_written": false
+        },
+        "e2": {
+          "expected": "needs_approval",
+          "got": "needs_approval",
+          "name": "8.12e2",
+          "pass": true,
+          "request_file_written": false
+        },
+        "e3": {
+          "expected": "file_not_found",
+          "got": "file_not_found",
+          "name": "8.12e3",
+          "pass": true,
+          "request_file_written": false
+        },
+        "e4": {
+          "expected": "sha256-mismatch",
+          "got": "sha256-mismatch",
+          "name": "8.12e4",
+          "pass": true,
+          "request_file_written": false
+        }
+      },
+      "gate": "class-line-240",
+      "status": "needs_approval"
+    },
+    "probe_8_12f": {
+      "expected": "revert-plan-invalid",
+      "got": "revert-plan-invalid",
+      "name": "8.12f",
+      "pass": true
+    },
+    "slice_approval": {
+      "by": "8.12 self-test",
+      "reason": "test-only install of an S1-verified MSI inside the self-test binary",
+      "scope": "slice-slice-npp-001 only"
+    },
+    "slice_exit_code": 0,
+    "slice_id": "slice-46108740488",
+    "slice_inputs_echo": {
+      "command_id": "slice-npp-001",
+      "dedup_key": "v1:install:1062cc219a70d68e01d3504561c472ea662e7aa5f471d2c57c2a9a0828b4b68f",
+      "install_dir": "C:\\bimo-slice\\Notepad++",
+      "install_location_expected": "C:\\bimo-slice\\Notepad++",
+      "msi_path": "D:\\a\\_temp\\bimo-slice-slice-46108740488\\npp.8.9.9.1.Installer.x64.msi",
+      "msi_sha256": "e3b0607a092ce2604fbdac027db2c94915995e8e568ebd226f8c5493c2f61a80",
+      "msi_size_bytes": 7933952,
+      "name_substring": "Notepad++",
+      "product_code": "{A23B657D-838B-4C9B-8F9D-386E50C1A76B}",
+      "slice_id": "slice-46108740488",
+      "ttl_secs": 3600,
+      "upgrade_code": "{CDB13460-04DF-4708-A7FD-4CB4A0684605}"
+    },
+    "steps": {
+      "s2": {
+        "dedup_key": "v1:install:1062cc219a70d68e01d3504561c472ea662e7aa5f471d2c57c2a9a0828b4b68f",
+        "ts": 1795841035,
+        "ttl_secs": 3600
+      },
+      "s3": {
+        "duration_ms": 2251,
+        "exec_request_file": "D:\\a\\_temp\\bimo-slice-slice-46108740488\\hand-data\\hand.exec-request-slice-npp-001.json",
+        "result": {
+          "cancel_ms": 0,
+          "duration_ms": 2133,
+          "handler_calls": 1431,
+          "id": "slice-npp-001",
+          "msi_log_enable_rc": 0,
+          "pre_command_state": {
+            "msi_execute_mutex_free": true,
+            "product_state": -1,
+            "target_dir": "C:\\bimo-slice\\Notepad++",
+            "target_folder_listing": {
+              "entries": [],
+              "exists": false,
+              "is_empty": true
+            }
+          },
+          "return_code": 0,
+          "status": "done",
+          "supervisor_rehash": {
+            "computed_sha256": "e3b0607a092ce2604fbdac027db2c94915995e8e568ebd226f8c5493c2f61a80",
+            "match": true
+          }
+        },
+        "supervisor_rehash": {
+          "computed_sha256": "e3b0607a092ce2604fbdac027db2c94915995e8e568ebd226f8c5493c2f61a80",
+          "match": true
+        },
+        "ts": 1795841035
+      },
+      "s7": {
+        "duration_ms": 2350,
+        "result": "reverted",
+        "ts": 1795841044
+      }
+    }
+  },
+  "diag": {
+    "msi_get_product_info": {
+      "install_location": "",
+      "rc": 0
+    },
+    "errors": [],
+    "exe_by_root": [
+      {
+        "root": "C:\\bimo-slice",
+        "exe_path": "C:\\bimo-slice\\Notepad++\\notepad++.exe",
+        "exe_present": true
+      },
+      {
+        "root": "C:\\Program Files\\Notepad++",
+        "exe_path": null,
+        "exe_present": false
+      },
+      {
+        "root": "C:\\Program Files (x86)\\Notepad++",
+        "exe_path": null,
+        "exe_present": false
+      }
+    ],
+    "council": "21",
+    "step": "S-DIAG",
+    "msi_log": {
+      "present_in_hand_data": true,
+      "copied_size_bytes": 12634
+    },
+    "listing": [
+      {
+        "root": "C:\\bimo-slice",
+        "entries": 229,
+        "exists": true
+      },
+      {
+        "root": "C:\\Program Files\\Notepad++",
+        "entries": 0,
+        "exists": false
+      },
+      {
+        "root": "C:\\Program Files (x86)\\Notepad++",
+        "entries": 0,
+        "exists": false
+      }
+    ],
+    "uninstall_key": {
+      "key_present": true,
+      "display_name": "Notepad++ (x64)",
+      "install_location": "",
+      "uninstall_string": "MsiExec.exe /I{A23B657D-838B-4C9B-8F9D-386E50C1A76B}"
+    },
+    "conditions": [
+      "D1",
+      "D2"
+    ]
+  },
+  "slice_inputs": {
+    "slice_id": "slice-46108740488",
+    "msi_path": "D:\\a\\_temp\\bimo-slice-slice-46108740488\\npp.8.9.9.1.Installer.x64.msi",
+    "install_dir": "C:\\bimo-slice\\Notepad++",
+    "ttl_secs": 3600,
+    "upgrade_code": "{CDB13460-04DF-4708-A7FD-4CB4A0684605}",
+    "name_substring": "Notepad++",
+    "install_location_expected": "C:\\bimo-slice\\Notepad++",
+    "product_code": "{A23B657D-838B-4C9B-8F9D-386E50C1A76B}",
+    "msi_size_bytes": 7933952,
+    "command_id": "slice-npp-001",
+    "msi_sha256": "e3b0607a092ce2604fbdac027db2c94915995e8e568ebd226f8c5493c2f61a80"
+  },
+  "runner_note": "does not prove device performance",
+  "reasons": [
+    "s7-failed: fail-revert-failed: not clean after revert",
+    "stress-inconclusive: slice verdict is fail (stress run invalid as a stress test)"
+  ],
+  "checkpoints": [
+    {
+      "ts": "2026-11-28T04:43:43.7518530+00:00",
+      "note": "enter",
+      "phase": "S0"
+    },
+    {
+      "ts": "2026-11-28T04:43:44.0289884+00:00",
+      "note": "enter",
+      "phase": "S0b"
+    },
+    {
+      "ts": "2026-11-28T04:43:44.5893347+00:00",
+      "note": "enter",
+      "phase": "S0c"
+    },
+    {
+      "ts": "2026-11-28T04:43:47.2423563+00:00",
+      "note": "enter",
+      "phase": "S1"
+    },
+    {
+      "ts": "2026-11-28T04:43:54.5093863+00:00",
+      "note": "enter",
+      "phase": "S1.6"
+    },
+    {
+      "ts": "2026-11-28T04:43:54.5214832+00:00",
+      "note": "enter",
+      "phase": "Phase1"
+    },
+    {
+      "ts": "2026-11-28T04:43:58.2583753+00:00",
+      "note": "enter",
+      "phase": "S-DIAG"
+    },
+    {
+      "ts": "2026-11-28T04:43:58.3041601+00:00",
+      "note": "enter",
+      "phase": "S6"
+    },
+    {
+      "ts": "2026-11-28T04:43:58.3210332+00:00",
+      "note": "enter",
+      "phase": "S4"
+    },
+    {
+      "ts": "2026-11-28T04:44:04.2735031+00:00",
+      "note": "enter",
+      "phase": "S-STRESS"
+    },
+    {
+      "ts": "2026-11-28T04:44:04.2802423+00:00",
+      "note": "enter",
+      "phase": "S5"
+    },
+    {
+      "ts": "2026-11-28T04:44:04.5609550+00:00",
+      "note": "enter-finally",
+      "phase": "S7"
+    },
+    {
+      "ts": "2026-11-28T04:44:06.9644719+00:00",
+      "note": "enter-finally",
+      "phase": "StopEye"
+    },
+    {
+      "ts": "2026-11-28T04:44:08.1053656+00:00",
+      "note": "enter-finally",
+      "phase": "S8"
+    }
+  ]
+}
