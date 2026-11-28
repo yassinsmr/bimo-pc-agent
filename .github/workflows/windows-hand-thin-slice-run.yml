@@ -194,6 +194,12 @@ name: windows-hand-thin-slice-run
 # and no further slice run happens without a new council. The cycle-55
 # cap ("do not re-add the push trigger") applied to the SPIKE workflow
 # (windows-hand-thin-slice.yml) only and is superseded here by council 27.
+# COUNCIL 29 VERDICT (cycle 71, run 13 FAIL/inconclusive — verdict (أ)):
+# M5 REOPENED. The rule above fired literally (run 13 verdict != pass;
+# the workflow threw). No `update` build and no S4-dependent code until
+# a clean stress run passes. The corrected spec (§9 + workflow fix) goes
+# to light council 30 before the push that fires run 14; run 14 is §9's
+# one re-run, consumed by it. No third stress run without a new council.
 # Paths: only files the slice run consumes (built crates bimo-eye /
 # bimo-hand / bimo-shot, the lockfile, this workflow, the sourced
 # helper script). bimo-core is NOT a dependency of any built crate,
@@ -722,7 +728,7 @@ jobs:
             if (-not (Test-Path $rawLogPath)) { Fail "S4 settle fail: raw log missing: $rawLogPath (the settle cannot be measured — never mistake a missing log for a quiet tree)" }
             $settleStartTs = [DateTimeOffset]::UtcNow
             $settleDeadline = $settleStartTs.AddSeconds(30)
-            # --- S4 STRESS injector (cycle 71, design §9 — ONE RUN ONLY) ---
+            # --- S4 STRESS injector (cycle 72, design §9 rev.2 — council 29 cond. 2; run 14 is §9's ONE re-run) ---
             # A background job that injects ONE late file event inside
             # the settle window: it fires when BOTH (a) >= 2.0 s have
             # passed since settle start and (b) the raw log shows
@@ -730,11 +736,22 @@ jobs:
             # Self-contained parsing (no parent-session functions) and
             # a 25 s deadline; if the window never opens it exits
             # without injecting and the run is inconclusive, never a pass.
+            # The injected file lives DIRECTLY under WATCH_PARENT
+            # (C:\bimo-slice), OUTSIDE the install dir: S7 checks only
+            # the install dir, so the injected file cannot pollute the
+            # S7 clean check by construction (run 13 proved the old
+            # in-install-dir path did pollute it).
             # The job is waited on in S-STRESS (after the S4 read) and
             # stopped first in the finally block on the failure path,
-            # so a late injection can never pollute the S7 clean check.
+            # so the job cannot inject during S7. Stopping the
+            # job never removed the already-written file — that was the
+            # run-13 comment error, corrected here.
             $injectFileName = "late-inject-$env:GITHUB_RUN_ID.txt"
-            $injectPath = "$env:SLICE_INSTALL_DIR\$injectFileName"
+            $injectPath = "$env:WATCH_PARENT\$injectFileName"
+            # GUARD (council 29 cond. 2 — automatic): the injection
+            # path must be outside the install dir; fail the run loud
+            # if it ever lands inside it again.
+            if ($injectPath -like "$env:SLICE_INSTALL_DIR*") { Fail "S4 stress guard: inject path inside install dir: $injectPath" }
             $injectRecordPath = "$sliceDir\late-inject.json"
             $injectJobScript = {
               param($settleStartIso, $rawLog, $injPath, $recPath, $watchParent, $probePrefix, $runId)
@@ -794,8 +811,12 @@ jobs:
                 $lastRawFileEventTs = ($fileEvts | ForEach-Object { [DateTimeOffset]::Parse($_.ts) } | Sort-Object | Select-Object -Last 1)
                 $quietSince = $lastRawFileEventTs
               }
-              # 2 s quiet + 2 s catch-up as one 4 s quiet window.
-              if (([DateTimeOffset]::UtcNow - $quietSince).TotalSeconds -ge 4) { $settled = $true; break }
+              # 5 s NOMINAL quiet window (cycle 72, council 29 cond. 2):
+              # raw timestamps are truncated to the second (run-13
+              # finding), so a 5.0 s nominal gap guarantees > 4.0 s of
+              # REAL quiet. The old 4.0 s nominal threshold only
+              # guaranteed > 3.0 s real — run 13 landed under it.
+              if (([DateTimeOffset]::UtcNow - $quietSince).TotalSeconds -ge 5) { $settled = $true; break }
               Start-Sleep -Milliseconds 250
             }
             if (-not $settled) { $settleCapHit = $true }
@@ -944,16 +965,46 @@ jobs:
             if ($null -ne $s7F -and $s7F.status -eq "skipped" -and $s3Succeeded) { $verdict = "fail"; $reasons += "s7-skipped-but-s3-succeeded" }
             # S-STRESS verdict (cycle 71, design §9 — literal criteria):
             # pass ⟺ injected ∧ no cap ∧ last-raw ≥ inject−2s ∧
-            # decision−last-raw ≥ 4.0s ∧ eye saw the injected path by
-            # the S4 read ∧ slice verdict pass. A stress FAIL is the
-            # named "decision on a stale snapshot" → M5 reopens
-            # immediately (council 27 condition 2); an inconclusive
-            # stress run is never a pass. The slice verdict is read
-            # FIRST: a non-pass slice makes the stress run invalid
-            # (inconclusive), never a stress pass.
+            # decision−last-raw ≥ 5.0s NOMINAL (guarantees > 4.0s real
+            # quiet under 1 s timestamp truncation) ∧
+            # decision−inject_ts ≥ 4.0s (ms-precision reference) ∧
+            # eye saw the injected path by the S4 read ∧ slice verdict
+            # pass. A stress FAIL is the named "decision on a stale
+            # snapshot" → M5 reopens immediately (council 27 cond. 2);
+            # an inconclusive stress run is never a pass. Evidence is
+            # populated FIRST and ALWAYS (council 29 cond. 2): an
+            # inconclusive run is exactly the case that needs evidence
+            # most. The slice verdict is read FIRST: a non-pass slice
+            # makes the stress run invalid (inconclusive), never a
+            # stress pass.
             $injectRec = Read-JsonOrNull "$sliceDir\late-inject.json"
             $stressStatus = "inconclusive"; $stressReason = $null
-            $stressEvidence = @{ injected = $false; inject_ts = $null; inject_path = $null; eye_saw_injected = $null; eye_injected_event_ts = $null; last_raw_file_event_ts = $null; settle_decision_ts = $null; quiet_after_inject_secs = $null; settle_cap_hit = $null }
+            $stressEvidence = @{ injected = $false; inject_ts = $null; inject_path = $null; eye_saw_injected = $null; eye_injected_event_ts = $null; last_raw_file_event_ts = $null; settle_decision_ts = $null; quiet_after_inject_secs = $null; quiet_nominal_secs = $null; settle_cap_hit = $null }
+            # --- EVIDENCE FIRST (always; even when the slice fails) ---
+            if ($null -ne $injectRec) {
+              $stressEvidence.injected = ($injectRec.injected -eq $true)
+              $stressEvidence.inject_ts = $injectRec.inject_ts
+              $stressEvidence.inject_path = $injectRec.path
+            }
+            if ($null -ne $witF) {
+              $stressEvidence.last_raw_file_event_ts = $witF.last_raw_file_event_ts
+              $stressEvidence.settle_decision_ts = $witF.settle_decision_ts
+              $stressEvidence.settle_cap_hit = $witF.settle_cap_hit
+            }
+            if ($null -ne $stressEvidence.inject_ts -and $null -ne $stressEvidence.settle_decision_ts) {
+              $stressEvidence.quiet_after_inject_secs = ([DateTimeOffset]::Parse($stressEvidence.settle_decision_ts) - [DateTimeOffset]::Parse($stressEvidence.inject_ts)).TotalSeconds
+            }
+            if ($null -ne $stressEvidence.last_raw_file_event_ts -and $null -ne $stressEvidence.settle_decision_ts) {
+              $stressEvidence.quiet_nominal_secs = ([DateTimeOffset]::Parse($stressEvidence.settle_decision_ts) - [DateTimeOffset]::Parse($stressEvidence.last_raw_file_event_ts)).TotalSeconds
+            }
+            if ($null -ne $stressEvidence.inject_path) {
+              $eyeNowEarly = Read-EyeLog -Path $logPath
+              $injHitsEarly = @($eyeNowEarly | Where-Object { $_.path -eq $stressEvidence.inject_path })
+              if ($injHitsEarly.Count -gt 0) {
+                $stressEvidence.eye_saw_injected = $true
+                $stressEvidence.eye_injected_event_ts = (($injHitsEarly | ForEach-Object { [DateTimeOffset]::Parse($_.ts) } | Sort-Object | Select-Object -Last 1)).ToString("o")
+              } else { $stressEvidence.eye_saw_injected = $false }
+            }
             if ($verdict -ne "pass") {
               $stressReason = "stress-inconclusive: slice verdict is $verdict (stress run invalid as a stress test)"
             } elseif ($null -eq $injectRec) {
@@ -961,16 +1012,7 @@ jobs:
             } elseif (-not $injectRec.injected) {
               $stressReason = "stress-inconclusive: no injection within 25 s (no settle window observed)"
             } else {
-              $stressEvidence.injected = $true
-              $stressEvidence.inject_ts = $injectRec.inject_ts
-              $stressEvidence.inject_path = $injectRec.path
               $injectTs = [DateTimeOffset]::Parse($injectRec.inject_ts)
-              $eyeNow = Read-EyeLog -Path $logPath
-              $injHits = @($eyeNow | Where-Object { $_.path -eq $injectRec.path })
-              if ($injHits.Count -gt 0) {
-                $stressEvidence.eye_saw_injected = $true
-                $stressEvidence.eye_injected_event_ts = (($injHits | ForEach-Object { [DateTimeOffset]::Parse($_.ts) } | Sort-Object | Select-Object -Last 1)).ToString("o")
-              } else { $stressEvidence.eye_saw_injected = $false }
               $lastRawTs = $null
               if ($null -ne $witF -and $null -ne $witF.last_raw_file_event_ts) { $lastRawTs = [DateTimeOffset]::Parse($witF.last_raw_file_event_ts) }
               $decTs = $null
@@ -980,16 +1022,13 @@ jobs:
               if ($null -ne $witF -and $null -ne $witF.s4_read_ts) { $s4ReadTs = [DateTimeOffset]::Parse($witF.s4_read_ts) }
               $eyeTs = $null
               if ($stressEvidence.eye_saw_injected -and $null -ne $stressEvidence.eye_injected_event_ts) { $eyeTs = [DateTimeOffset]::Parse($stressEvidence.eye_injected_event_ts) }
-              $quietAfterInject = if ($null -ne $lastRawTs -and $null -ne $decTs) { ($decTs - $lastRawTs).TotalSeconds } else { $null }
-              $stressEvidence.last_raw_file_event_ts = $(if ($null -ne $lastRawTs) { $lastRawTs.ToString("o") } else { $null })
-              $stressEvidence.settle_decision_ts = $(if ($null -ne $decTs) { $decTs.ToString("o") } else { $null })
-              $stressEvidence.quiet_after_inject_secs = $quietAfterInject
-              $stressEvidence.settle_cap_hit = $capHit
-              $passStress = ($capHit -eq $false) -and ($null -ne $lastRawTs) -and (($lastRawTs - $injectTs).TotalSeconds -ge -2) -and ($null -ne $quietAfterInject -and $quietAfterInject -ge 4.0) -and ($stressEvidence.eye_saw_injected -eq $true) -and ($null -ne $eyeTs -and $null -ne $s4ReadTs -and $eyeTs -le $s4ReadTs)
+              $quietAfterInject = $stressEvidence.quiet_after_inject_secs
+              $quietNominal = $stressEvidence.quiet_nominal_secs
+              $passStress = ($capHit -eq $false) -and ($null -ne $lastRawTs) -and (($lastRawTs - $injectTs).TotalSeconds -ge -2) -and ($null -ne $quietNominal -and $quietNominal -ge 5.0) -and ($null -ne $quietAfterInject -and $quietAfterInject -ge 4.0) -and ($stressEvidence.eye_saw_injected -eq $true) -and ($null -ne $eyeTs -and $null -ne $s4ReadTs -and $eyeTs -le $s4ReadTs)
               if ($passStress) { $stressStatus = "pass"; $stressReason = $null }
               else {
                 $stressStatus = "fail"
-                $stressReason = "stress-failed: decision on a stale snapshot (injected event not witnessed before the S4 read, or quiet after inject < 4 s)"
+                $stressReason = "stress-failed: decision on a stale snapshot (injected event not witnessed before the S4 read, or quiet < 5 s nominal / < 4 s after inject)"
               }
             }
             $stress = @{ status = $stressStatus; reason = $stressReason; evidence = $stressEvidence }
