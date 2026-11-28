@@ -147,6 +147,16 @@ pub fn cancel_depth() -> Value {
         "handler_calls_at_cancel": calls,
     })
 }
+
+/// Last MSI action reported by the external UI handler, if any.
+/// Read by the supervisor's monitor thread for the action-based
+/// cancel (8.1 phase B, run-42 fix): abort as soon as the handler
+/// first reports `InstallFiles`, instead of after a wall-clock
+/// fraction of the phase-A duration. `None` until the handler
+/// reports its first action.
+pub fn last_action() -> Option<String> {
+    LAST_ACTION.lock().ok().and_then(|g| g.clone())
+}
 #[link(name = "msi")]
 extern "system" {
   fn MsiInstallProductW(pkg: *const u16, cmdline: *const u16) -> u32;
@@ -430,4 +440,31 @@ pub fn target_folder_listing(path: &str) -> Value {
     entries.sort();
     let is_empty = entries.is_empty();
     json!({ "exists": true, "is_empty": is_empty, "entries": entries })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn last_action_tracks_handler_messages() {
+        // Single test on purpose: LAST_ACTION is a process-global
+        // static, so two tests touching it would race under the
+        // parallel test runner (same lesson as the temp-dir race,
+        // cycle 43).
+        reset_cancel_depth();
+        assert_eq!(last_action(), None);
+        record_msi_message("Copying files: notepad++.exe");
+        assert_eq!(last_action(), None);
+        record_msi_message("");
+        assert_eq!(last_action(), None);
+        record_msi_message("Action start 07:48:01: InstallValidate.");
+        assert_eq!(last_action().as_deref(), Some("InstallValidate"));
+        record_msi_message("Action start 07:48:02: InstallFiles.");
+        assert_eq!(last_action().as_deref(), Some("InstallFiles"));
+        record_msi_message("Action start 07:48:05: PublishProduct.");
+        assert_eq!(last_action().as_deref(), Some("PublishProduct"));
+        reset_cancel_depth();
+        assert_eq!(last_action(), None);
+    }
 }

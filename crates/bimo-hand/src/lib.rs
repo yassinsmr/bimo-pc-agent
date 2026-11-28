@@ -444,6 +444,12 @@ pub mod msi {
     pub fn cancel_depth() -> Value {
         json!({"last_action": null, "reached_register_product": false, "handler_calls_at_cancel": 0})
     }
+
+    /// Non-Windows stub: no MSI handler exists here, so no action is
+    /// ever reported; the supervisor's action trigger never fires.
+    pub fn last_action() -> Option<String> {
+        None
+    }
     
 }
 

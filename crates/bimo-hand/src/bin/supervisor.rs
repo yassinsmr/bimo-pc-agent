@@ -377,6 +377,22 @@ fn trigger_from_reason(reason: &str) -> kill::StopTrigger {
     }
 }
 
+/// Action-trigger file for one MSI request (8.1 phase B, run-42 fix):
+/// `hand.stop-at-action-<id>.json` containing `{"action": "<name>"}`.
+/// The monitor thread aborts the install as soon as the external UI
+/// handler first reports that action — deterministic in install
+/// progress, not in wall-clock time. Written by the self-test only;
+/// consumed (deleted) when it fires, and deleted on normal completion
+/// so a stale file can never abort a later request.
+fn action_trigger_path(data_dir: &Path, id: &str) -> PathBuf {
+    data_dir.join(format!("hand.stop-at-action-{}.json", id))
+}
+
+fn read_action_trigger(data_dir: &Path, id: &str) -> Option<String> {
+    let v = read_json_file(&action_trigger_path(data_dir, id))?;
+    v.get("action").and_then(|a| a.as_str()).map(|s| s.to_string())
+}
+
 /// v2 (cycle 41, condition 5): MSI install handling. MsiInstallProduct
 /// runs in a dedicated thread inside the supervisor; this function is the
 /// monitor thread: it watches hand.stop while the install thread is
@@ -392,7 +408,23 @@ fn handle_msi_request(req: &ExecRequest, ctl: &HandControl, data_dir: &Path, sta
     let (cancel, outcome_slot) = sup::run_msi_install_in_thread(msi_path.clone());
     let result_path = exec_result_path(data_dir, &req.id);
     loop {
-        if ctl.stop_present() {
+        // Action-based cancel (8.1 phase B, run-42 fix): abort as soon
+        // as the UI handler first reports the requested action. The
+        // wall-clock trigger (hand.stop at 40% of the phase-A duration)
+        // let the install outrun the cancel twice (runs 36/42:
+        // last_action PublishProduct, return 0, product left
+        // installed) — the trigger must be in install progress, not in
+        // elapsed time. The monitor polls every 50 ms, so the abort
+        // lands early inside the file-copy phase.
+        let action_trigger = read_action_trigger(data_dir, &req.id);
+        let action_fired = match &action_trigger {
+            Some(a) => bimo_hand::msi::last_action().as_deref() == Some(a.as_str()),
+            None => false,
+        };
+        if ctl.stop_present() || action_fired {
+            if action_fired {
+                let _ = fs::remove_file(action_trigger_path(data_dir, &req.id));
+            }
             let reason = ctl.stop_reason().unwrap_or_else(|| "hand.stop".to_string());
             let _ = ctl.apply_stop(&reason);
             let outcome = kill::abort(
@@ -412,6 +444,14 @@ fn handle_msi_request(req: &ExecRequest, ctl: &HandControl, data_dir: &Path, sta
                 "remaining_pids": outcome.remaining_pids, "handles_released": outcome.handles_released,
                 "return_code": outcome.return_code, "forced_ms": outcome.forced_ms,
                 "abort": outcome.to_json(), "pre_command_state": pre_state,
+                // (c78 merge note: the branch's "supervisor_rehash" line
+                // is NOT carried here — main has no rehash variable; the
+                // supervisor rehash gate is a branch-only defence-in-depth
+                // layer, NOT ported in this merge. The executor hash gate
+                // (§25.2/§39.3, kept in the executor.rs resolution) stays
+                // the enforcement point. Open item, recorded in the dev log.)
+                "trigger_action": action_trigger,
+                "cancel_at_ms": started_at.elapsed().as_millis() as u64,
                 "duration_ms": started_at.elapsed().as_millis() as u64,
             }));
             return false;
@@ -447,6 +487,9 @@ fn handle_msi_request(req: &ExecRequest, ctl: &HandControl, data_dir: &Path, sta
             }
         }
         if let Some(o) = done {
+            // Normal completion without a trigger fire: drop any
+            // action-trigger file so it can never abort a later request.
+            let _ = fs::remove_file(action_trigger_path(data_dir, &req.id));
             let status = if o.return_code == 0 { "done" } else { "failed" };
             let _ = write_json_file(&result_path, &json!({
                 "id": req.id, "status": status, "return_code": o.return_code,
