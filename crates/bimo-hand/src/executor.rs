@@ -32,6 +32,10 @@
 use crate::control::HandControl;
 use crate::guardian::Guardian;
 use crate::queue::{is_expired, Command};
+use crate::update::{
+    parse_update_args, revert_availability, winget_revert_args, winget_update_args,
+    RevertAvailability,
+};
 use crate::{read_json_file, utc_now_secs, write_json_file};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -122,7 +126,77 @@ pub fn read_exec_result(data_dir: &Path, id: &str) -> Option<Value> {
     read_json_file(&exec_result_path(data_dir, id))
 }
 
-/// Poll for an exec result until `timeout`. Returns `None` on timeout.
+/// Check a file against an expected SHA-256 (lowercase hex, 64 chars).
+/// `expected == None` => `sha256-required`; malformed => `sha256-mismatch`;
+/// unreadable file => `sha256-unreadable`; hash differs => `sha256-mismatch`.
+/// Shared by the install gate (§25.2) and the update official-installer
+/// path (council 28 cond. 5 — the single download line).
+pub fn check_file_hash(path: &str, expected: Option<&str>) -> Result<(), String> {
+    match expected {
+        None => Err("sha256-required".to_string()),
+        Some(expected) => {
+            let expected = expected.trim().to_lowercase();
+            let well_formed =
+                expected.len() == 64 && expected.chars().all(|c| c.is_ascii_hexdigit());
+            if !well_formed {
+                return Err("sha256-mismatch".to_string());
+            }
+            match crate::file_sha256(Path::new(path)) {
+                Ok(computed) => {
+                    if computed != expected {
+                        return Err("sha256-mismatch".to_string());
+                    }
+                    Ok(())
+                }
+                Err(_) => Err("sha256-unreadable".to_string()),
+            }
+        }
+    }
+}
+
+/// Build the supervisor request that reverts an `update`: reinstall the
+/// OLD version via winget (design §4). The revert target must be
+/// available at execution time (cond. 3); `revert-unverifiable` is
+/// refused here — the command never executes without Yassin's explicit
+/// approval (the executor gate in `prepare_execution`).
+/// Executed through the supervisor like any command (winget has no
+/// in-process API); `revert()` in revert.rs points here.
+pub fn revert_update_request(cmd: &Command) -> Result<ExecRequest, String> {
+    if cmd.kind != "update" {
+        return Err(format!("revert_update_request: not an update command: {}", cmd.kind));
+    }
+    let args = parse_update_args(cmd)?;
+    let old_version = cmd
+        .revert_plan
+        .get("old_version")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or(args.old_version.clone())
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| "revert-no-old-version".to_string())?;
+    match revert_availability(&cmd.revert_plan) {
+        RevertAvailability::Unverifiable => Err("revert-unverifiable".to_string()),
+        _ => Ok(ExecRequest {
+            id: format!("{}-revert", cmd.id),
+            kind: "update".to_string(),
+            program: "winget.exe".to_string(),
+            args: winget_revert_args(&args.package, &old_version),
+            working_dir: None,
+            cleanup_path: None,
+            install_dir: cmd
+                .args
+                .get("install_dir")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            grandchild_out: None,
+            installer_kind: Some("winget".to_string()),
+            product_code: None,
+            name_substring: None,
+            expected_sha256: None,
+            targetdir: None,
+        }),
+    }
+}
 pub fn wait_exec_result(data_dir: &Path, id: &str, timeout: Duration) -> Option<Value> {
     let deadline = Instant::now() + timeout;
     loop {
@@ -244,6 +318,42 @@ pub fn prepare_execution(
             return Err("needs_approval:over-2gb".to_string());
         }
     }
+    // `update` pre-flight gates (council 28, conds. 1/3/4/5).
+    if cmd.kind == "update" {
+        let uargs = parse_update_args(cmd)?;
+        // Cond. 1: TTL blocks acceptance only — the generic
+        // `is_expired` check above IS the acceptance check; no TTL
+        // kill is ever armed for a running update (see
+        // `update::ttl_kill_exempt`; the worker consults it before
+        // arming any TTL stop).
+        // Cond. 3: revert-unverifiable needs Yassin's explicit
+        // approval (phone channel); until then the command stays queued.
+        if revert_availability(&cmd.revert_plan) == RevertAvailability::Unverifiable
+            && !cmd.approved
+        {
+            return Err("needs_approval".to_string());
+        }
+        // Cond. 2 idempotency: installed == frozen target → done
+        // without reinstalling (proof: winget list lines before/after).
+        if let Some(installed) = &uargs.installed_version {
+            if installed == &uargs.frozen_version {
+                return Err("already_done".to_string());
+            }
+        }
+        // Cond. 5: the official-installer path goes through the single
+        // download line — guardian gate + hash gate on the installer.
+        // The winget path has NO guardian payload check in v1 (named
+        // risk: a compromised manifest entry is not detected by the
+        // guardian); verification there is the manifest hash +
+        // Authenticode signature (the same two checks S1 applies).
+        if let Some(installer) = cmd.args.get("installer_path").and_then(|v| v.as_str()) {
+            guardian.gate(Path::new(installer))?;
+            check_file_hash(
+                installer,
+                cmd.args.get("expected_sha256").and_then(|v| v.as_str()),
+            )?;
+        }
+    }
     // Guardian gate on the file that would be executed / installed.
     let target = cmd
         .args
@@ -267,25 +377,7 @@ pub fn prepare_execution(
     // on any of these failures.
     if cmd.kind == "install" && !cmd.args.get("uninstall").and_then(|v| v.as_bool()).unwrap_or(false) {
         if let Some(msi) = cmd.args.get("msi").and_then(|v| v.as_str()) {
-            match cmd.args.get("expected_sha256").and_then(|v| v.as_str()) {
-                None => return Err("sha256-required".to_string()),
-                Some(expected) => {
-                    let expected = expected.trim().to_lowercase();
-                    let well_formed = expected.len() == 64
-                        && expected.chars().all(|c| c.is_ascii_hexdigit());
-                    if !well_formed {
-                        return Err("sha256-mismatch".to_string());
-                    }
-                    match crate::file_sha256(Path::new(msi)) {
-                        Ok(computed) => {
-                            if computed != expected {
-                                return Err("sha256-mismatch".to_string());
-                            }
-                        }
-                        Err(_) => return Err("sha256-unreadable".to_string()),
-                    }
-                }
-            }
+            check_file_hash(msi, cmd.args.get("expected_sha256").and_then(|v| v.as_str()))?;
         }
     }
     // Idempotency: the result already exists — done, without executing.
@@ -399,6 +491,36 @@ pub fn prepare_execution(
             expected_sha256: None,
             targetdir: None,
         },
+        "update" => {
+            // Council 28 cond. 1: the frozen version is always named
+            // at execution — the executable form is `install --version
+            // <frozen>`, never a bare `upgrade` to a moving "latest".
+            // The supervisor launches winget.exe in the job like any
+            // generic program; the cond. 2 `done` verdict is applied
+            // by the worker from the result + independent reads
+            // (update::update_final_state), NOT by the supervisor's
+            // exit-code mapping.
+            let uargs = parse_update_args(cmd)?;
+            ExecRequest {
+                id: cmd.id.clone(),
+                kind: "update".to_string(),
+                program: "winget.exe".to_string(),
+                args: winget_update_args(&uargs.package, &uargs.frozen_version),
+                working_dir: None,
+                cleanup_path: None,
+                install_dir: cmd
+                    .args
+                    .get("install_dir")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                grandchild_out: None,
+                installer_kind: Some("winget".to_string()),
+                product_code: None,
+                name_substring: None,
+                expected_sha256: None,
+                targetdir: None,
+            }
+        }
         other => return Err(format!("exec_not_live:{}", other)),
     };
     Ok(req)
@@ -411,6 +533,13 @@ pub fn result_state(result: &Value) -> &'static str {
         Some("failed") => "failed",
         Some("stopped") => "stopped",
         Some("expired") => "expired",
+        // `update` states (council 28 cond. 4): pass through verbatim —
+        // collapsing `partial` to `failed` would hide the named state
+        // the recovery path decides on, and `needs_restart` is not a
+        // failure at all.
+        Some("partial") => "partial",
+        Some("needs_restart") => "needs_restart",
+        Some("revert_failed") => "revert_failed",
         _ => "failed",
     }
 }
@@ -498,5 +627,158 @@ fn install_outside_allowed_msi_class_needs_approval() {
     assert_eq!(err, "needs_approval");
     let _ = fs::remove_dir_all(&dir);
 }
-    
+
+    #[test]
+    fn update_disk_margin_matches_the_named_512mb() {
+        // Design §3 step 1 names 512 MB; executor.rs owns the constant.
+        assert_eq!(
+            crate::update::UPDATE_DISK_MARGIN_BYTES,
+            DISK_MARGIN_BYTES
+        );
+    }
+
+    fn update_cmd_fixture() -> Command {
+        new_command(
+            "upd-1",
+            "update",
+            json!({
+                "package": "Notepad++.Notepad++",
+                "frozen_version": "8.9.9.1",
+                "installed_version": "8.9.8",
+                "size_bytes": 8_000_000,
+            }),
+            3600,
+            json!({
+                "winget_id": "Notepad++.Notepad++",
+                "old_version": "8.9.8",
+                "old_version_available": true,
+            }),
+        )
+    }
+
+    fn exec_config(dir: &Path) -> HandConfig {
+        let mut config = HandConfig::default();
+        config.exec_enabled = true;
+        config.data_dir = dir.to_path_buf();
+        config
+    }
+
+    #[test]
+    fn update_prepare_builds_the_winget_request() {
+        let dir = test_dir();
+        let cmd = update_cmd_fixture();
+        let req = prepare_execution(&cmd, &exec_config(&dir), &Guardian::default()).unwrap();
+        assert_eq!(req.program, "winget.exe");
+        assert_eq!(
+            req.args,
+            vec!["install", "--id", "Notepad++.Notepad++", "--version", "8.9.9.1", "--exact", "--silent"]
+        );
+        assert_eq!(req.installer_kind.as_deref(), Some("winget"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn update_prepare_rejects_games_missing_frozen_and_unverifiable_revert() {
+        let dir = test_dir();
+        let config = exec_config(&dir);
+        // Game: out of v1 scope.
+        let mut game = update_cmd_fixture();
+        game.args = json!({"package": "X.Game", "frozen_version": "1.0", "game": true});
+        assert_eq!(
+            prepare_execution(&game, &config, &Guardian::default()).unwrap_err(),
+            "update-game-out-of-scope"
+        );
+        // No frozen version: never executes.
+        let mut no_frozen = update_cmd_fixture();
+        no_frozen.args = json!({"package": "X.App"});
+        assert_eq!(
+            prepare_execution(&no_frozen, &config, &Guardian::default()).unwrap_err(),
+            "update-no-frozen-version"
+        );
+        // Revert-unverifiable without approval: stays queued.
+        let mut unverb = update_cmd_fixture();
+        unverb.revert_plan = json!({"winget_id": "Notepad++.Notepad++", "old_version": "8.9.8"});
+        assert_eq!(
+            prepare_execution(&unverb, &config, &Guardian::default()).unwrap_err(),
+            "needs_approval"
+        );
+        // Same plan WITH approval: passes the gate.
+        let mut approved = unverb.clone();
+        approved.approved = true;
+        assert!(prepare_execution(&approved, &config, &Guardian::default()).is_ok());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn update_prepare_reports_already_done_without_reinstalling() {
+        let dir = test_dir();
+        let mut cmd = update_cmd_fixture();
+        cmd.args["installed_version"] = json!("8.9.9.1");
+        assert_eq!(
+            prepare_execution(&cmd, &exec_config(&dir), &Guardian::default()).unwrap_err(),
+            "already_done"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn update_result_states_pass_through() {
+        assert_eq!(result_state(&json!({"status": "partial"})), "partial");
+        assert_eq!(
+            result_state(&json!({"status": "needs_restart"})),
+            "needs_restart"
+        );
+        assert_eq!(
+            result_state(&json!({"status": "revert_failed"})),
+            "revert_failed"
+        );
+        assert_eq!(result_state(&json!({"status": "done"})), "done");
+        assert_eq!(result_state(&json!({"status": "weird"})), "failed");
+    }
+
+    #[test]
+    fn revert_update_request_reinstalls_the_old_version() {
+        let cmd = update_cmd_fixture();
+        let req = revert_update_request(&cmd).unwrap();
+        assert_eq!(req.id, "upd-1-revert");
+        assert_eq!(req.program, "winget.exe");
+        assert_eq!(
+            req.args,
+            vec!["install", "--id", "Notepad++.Notepad++", "--version", "8.9.8", "--exact", "--silent"]
+        );
+        // Unverifiable revert: refused, never executed.
+        let mut unverb = update_cmd_fixture();
+        unverb.revert_plan = json!({"winget_id": "Notepad++.Notepad++", "old_version": "8.9.8"});
+        assert_eq!(
+            revert_update_request(&unverb).unwrap_err(),
+            "revert-unverifiable"
+        );
+    }
+
+    #[test]
+    fn check_file_hash_branches() {
+        let dir = test_dir();
+        let file = dir.join("f.bin");
+        fs::write(&file, b"payload").unwrap();
+        let good = crate::sha256_hex(b"payload");
+        let path = file.to_string_lossy().to_string();
+        assert!(check_file_hash(&path, Some(&good)).is_ok());
+        assert_eq!(
+            check_file_hash(&path, None),
+            Err("sha256-required".to_string())
+        );
+        assert_eq!(
+            check_file_hash(&path, Some("abc")),
+            Err("sha256-mismatch".to_string())
+        );
+        assert_eq!(
+            check_file_hash(&path, Some(&"0".repeat(64))),
+            Err("sha256-mismatch".to_string())
+        );
+        assert_eq!(
+            check_file_hash("/nonexistent/f.bin", Some(&good)),
+            Err("sha256-unreadable".to_string())
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

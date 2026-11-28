@@ -33,6 +33,12 @@ pub enum RevertOutcome {
 /// - install: a winget id or an uninstaller path is recorded.
 /// - organize: a `moves` list with original paths + checksums.
 /// - transfer: `source` + `destination` (+ `source_checksum`).
+/// - update (council 28 cond. 3): winget id + old version + a revert
+///   target that is available (old version still published, re-checked
+///   at execution) or a saved official installer (path + sha256).
+///   A plan with neither is `revert-unverifiable` — valid as a plan
+///   (it is recorded), but the command does NOT execute without
+///   Yassin's explicit approval (executor gate).
 pub fn verify_revert_plan(cmd: &Command) -> bool {
     let plan = &cmd.revert_plan;
     match cmd.kind.as_str() {
@@ -43,6 +49,22 @@ pub fn verify_revert_plan(cmd: &Command) -> bool {
                 // §42.1 (C4(a)): a measured product_code is a valid
                 // revert plan for an install command.
                 || plan.get("product_code").and_then(|v| v.as_str()).is_some()
+        }
+        "update" => {
+            let has_id = plan
+                .get("winget_id")
+                .and_then(|v| v.as_str())
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false);
+            let has_old = plan
+                .get("old_version")
+                .and_then(|v| v.as_str())
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false);
+            has_id
+                && has_old
+                && crate::update::revert_availability(plan)
+                    != crate::update::RevertAvailability::Unverifiable
         }
         "organize" => match plan.get("moves").and_then(|v| v.as_array()) {
             Some(moves) => moves.iter().all(|m| {
@@ -78,6 +100,19 @@ pub fn revert(cmd: &Command, data_dir: &Path) -> RevertOutcome {
     let outcome = match cmd.kind.as_str() {
         "download" | "convert" => revert_delete_output(cmd),
         "transfer" => revert_transfer(cmd),
+        "update" => {
+            // Council 28 cond. 3: an `update` revert is a winget
+            // reinstall of the OLD version, executed through the
+            // supervisor like any command — winget has no in-process
+            // API, so this library function cannot perform it. The
+            // worker builds the request with
+            // `executor::revert_update_request` and executes it via
+            // the supervisor; `revert()` reports that explicitly
+            // instead of faking an in-process revert.
+            RevertOutcome::NotReversible(
+                "update revert runs as a supervisor winget command; build it with executor::revert_update_request".to_string(),
+            )
+        }
         "organize" => {
             // v1 organize is propose-only: nothing ever moved, so there
             // is nothing to undo.
@@ -291,6 +326,56 @@ mod tests {
         );
         assert!(dir.join("hand.revert-failed-inst1.json").exists());
         assert!(marker.exists(), "a failed revert must not delete the app");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn update_revert_plan_needs_id_old_version_and_available_target() {
+        let dir = test_dir("upd");
+        // Available old version: valid plan.
+        let cmd = new_command(
+            "up1",
+            "update",
+            json!({"package": "Notepad++.Notepad++", "frozen_version": "8.9.9.1"}),
+            3600,
+            json!({
+                "winget_id": "Notepad++.Notepad++",
+                "old_version": "8.9.8",
+                "old_version_available": true,
+            }),
+        );
+        assert!(verify_revert_plan(&cmd));
+        // Saved installer with hash: valid plan.
+        let sha = sha256_hex(b"installer-bytes");
+        let cmd2 = new_command(
+            "up2",
+            "update",
+            json!({"package": "Notepad++.Notepad++", "frozen_version": "8.9.9.1"}),
+            3600,
+            json!({
+                "winget_id": "Notepad++.Notepad++",
+                "old_version": "8.9.8",
+                "saved_installer_path": "C:\\dl\\npp-8.9.8.msi",
+                "saved_installer_sha256": sha,
+            }),
+        );
+        assert!(verify_revert_plan(&cmd2));
+        // Neither: revert-unverifiable — not a valid plan.
+        let cmd3 = new_command(
+            "up3",
+            "update",
+            json!({"package": "Notepad++.Notepad++", "frozen_version": "8.9.9.1"}),
+            3600,
+            json!({"winget_id": "Notepad++.Notepad++", "old_version": "8.9.8"}),
+        );
+        assert!(!verify_revert_plan(&cmd3));
+        // revert() itself never fakes an in-process winget revert.
+        assert_eq!(
+            revert(&cmd, &dir),
+            RevertOutcome::NotReversible(
+                "update revert runs as a supervisor winget command; build it with executor::revert_update_request".to_string()
+            )
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 

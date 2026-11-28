@@ -15,6 +15,7 @@ pub mod guardian;
 pub mod queue;
 pub mod revert;
 pub mod supervisor;
+pub mod update;
 #[cfg(windows)]
 pub mod kill;
 #[cfg(windows)]
