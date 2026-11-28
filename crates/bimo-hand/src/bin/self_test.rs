@@ -495,6 +495,9 @@ fn proof_8_5(ctx: &mut Ctx) -> Proof {
         installer_kind: None,
         product_code: None,
         name_substring: None,
+        // (c78 merge: new struct fields — None for probes.)
+        expected_sha256: None,
+        targetdir: None,
     };
     if write_exec_request(&ctx.data_dir, &req).is_err() {
         return fail(json!({"reason": "could not write exec request"}));

@@ -83,6 +83,20 @@ pub struct ExecRequest {
     pub product_code: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name_substring: Option<String>,
+    /// Expected SHA-256 (lowercase hex) of the MSI file (§25.2).
+    /// `Option` structurally so old request files still deserialize;
+    /// semantically REQUIRED for install commands (§25.2).
+    /// (c78 merge: field restored from the update branch — the
+    /// cherry-picked eb14ec5 literals set it, main's struct lacked it.)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_sha256: Option<String>,
+    /// Custom install root for the slice (§28.2 ruling (a)): when set,
+    /// the supervisor passes `TARGETDIR=<this>` to the installer and the
+    /// msiexec argument line carries it too. Set only when the command
+    /// opts in with `args.targetdir == true`; `None` = MSI default.
+    /// (c78 merge: same restoration as expected_sha256 above.)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub targetdir: Option<String>,
 }
 
 pub fn exec_request_path(data_dir: &Path, id: &str) -> PathBuf {
@@ -402,6 +416,10 @@ pub fn prepare_execution(
                 installer_kind: if uninstall { None } else { Some("msi".to_string()) },
                 product_code: cmd.args.get("product_code").and_then(|v| v.as_str()).map(|s| s.to_string()),
                 name_substring: cmd.args.get("name_substring").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                // (c78 merge: new struct fields default to None here —
+                // the install path above sets them from the command.)
+                expected_sha256: None,
+                targetdir: None,
             }
         }
         "transfer" => {
@@ -435,6 +453,9 @@ pub fn prepare_execution(
                 installer_kind: None,
                 product_code: None,
                 name_substring: None,
+                // (c78 merge: new struct fields — None for transfers.)
+                expected_sha256: None,
+                targetdir: None,
             }
         }
         "probe-grandchild" => ExecRequest {
@@ -453,6 +474,9 @@ pub fn prepare_execution(
             installer_kind: None,
             product_code: None,
             name_substring: None,
+            // (c78 merge: new struct fields — None for probes.)
+            expected_sha256: None,
+            targetdir: None,
         },
         "update" => {
             // Council 28 cond. 1: the frozen version is always named

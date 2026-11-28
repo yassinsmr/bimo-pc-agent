@@ -679,6 +679,10 @@ pub fn run_msi_install_in_thread(
             cancel_ms: 0,
             total_ms: 0,
             handler_calls: 0,
+            // (c78 merge: stub-drift fields restored, as in the branch.)
+            handler_first_ms: 0,
+            internal_ui_prev: 0,
+            external_ui_prev_non_null: false,
             cancelled: false,
         }))),
     )
