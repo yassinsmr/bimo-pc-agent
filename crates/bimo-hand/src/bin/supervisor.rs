@@ -211,7 +211,12 @@ fn run_worker(data_dir: &Path, heartbeat_secs: u64) {
             let _ = fs::remove_file(data_dir.join("hand.ping"));
         }
         if ctl.stop_present() {
-            let reason = ctl.stop_reason().unwrap_or_else(|| "hand.stop".to_string());
+            // (run-50 lesson) resolve via `stop_reason_resolved`:
+            // a plain read defaults an UNREADABLE stop to generic,
+            // which would arm it — the worker must not overwrite a
+            // `ttl` record the monitor still needs, nor apply a TTL
+            // stop the monitor would ignore.
+            let reason = ctl.stop_reason_resolved();
             // Council 35 cond. 1 (single arming authority, c81): the
             // worker consults the same TTL exemption the monitor loop
             // consults, keyed on the running command's kind published
@@ -442,7 +447,10 @@ fn handle_msi_request(req: &ExecRequest, ctl: &HandControl, data_dir: &Path, sta
             if action_fired {
                 let _ = fs::remove_file(action_trigger_path(data_dir, &req.id));
             }
-            let reason = ctl.stop_reason().unwrap_or_else(|| "hand.stop".to_string());
+            // (run-50 lesson) same resolution as the generic loop:
+            // an unreadable stop file must not default to a generic
+            // reason when the last applied record says otherwise.
+            let reason = ctl.stop_reason_resolved();
             let _ = ctl.apply_stop(&reason);
             let outcome = kill::abort(
                 kill::AbortTarget::Msi {
@@ -729,7 +737,12 @@ exe_path: root_exe_path.clone(),
             }
         }
         if ctl.stop_present() {
-            let reason = ctl.stop_reason().unwrap_or_else(|| "hand.stop".to_string());
+            // (run-50 lesson) resolve via `stop_reason_resolved`:
+            // the exemption is gated on the reason, and a stop file
+            // unreadable (locked) used to default to a generic stop
+            // — arming an exempt update instead of entering the TTL
+            // branch. The fallback reads the last applied record.
+            let reason = ctl.stop_reason_resolved();
             // Council 34 cond. 3 (TTL dead letter, wired c80; single
             // arming authority c81): a TTL stop never kills a running
             // `update` — this arming path consults

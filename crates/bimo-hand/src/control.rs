@@ -82,6 +82,38 @@ impl HandControl {
             .and_then(|v| v.get("reason").and_then(|r| r.as_str()).map(|s| s.to_string()))
     }
 
+    /// Resolve the reason of the stop currently filed, for arming
+    /// decisions. Prefers the reason recorded in `hand.stop`; when
+    /// the file is present but UNREADABLE (e.g. locked exclusively
+    /// by another process), falls back to the reason of the last stop
+    /// the worker applied, recorded in `hand.stopped`; with no such
+    /// record, `"hand.stop"`. Call only when `stop_present()`.
+    ///
+    /// Why the fallback matters (run-50 lesson): the TTL exemption
+    /// is gated on the reason, and an unreadable stop file used to
+    /// default to a generic stop — so a locked TTL stop armed as a
+    /// generic stop and killed an exempt update, defeating the
+    /// exemption. The fallback is sound because while the file is
+    /// locked no NEW stop can be written (any writer's open fails),
+    /// so the locked file's content is the one the worker already
+    /// applied, whose reason is in `hand.stopped`. Residual risk,
+    /// documented: a stale `hand.stopped` record plus a fresh stop
+    /// the worker never saw, combined with an exclusive locker,
+    /// could misattribute the reason — that combination needs a
+    /// locker, which no production filer creates.
+    pub fn stop_reason_resolved(&self) -> String {
+        if let Some(reason) = self.stop_reason() {
+            return reason;
+        }
+        if let Some(recorded) = self
+            .stopped_info()
+            .and_then(|v| v.get("reason").and_then(|r| r.as_str()).map(|s| s.to_string()))
+        {
+            return recorded;
+        }
+        "hand.stop".to_string()
+    }
+
     pub fn write_stop(&self, reason: &str) -> Result<(), String> {
         write_json_file(
             &self.path(STOP_FILE),
@@ -394,6 +426,25 @@ mod tests {
         // Matching reason: removed.
         assert!(ctl.clear_stopped_if_reason("ttl").unwrap());
         assert!(ctl.stopped_info().is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn stop_reason_resolved_prefers_file_then_last_applied() {
+        let dir = test_dir();
+        let ctl = HandControl::new(&dir, 2);
+        // Readable stop file wins over any applied record.
+        ctl.write_stop("ttl").unwrap();
+        ctl.apply_stop("guardian").unwrap();
+        assert_eq!(ctl.stop_reason_resolved(), "ttl");
+        // Unreadable stop file (a directory in its place) falls back
+        // to the last applied stop's reason.
+        fs::remove_file(dir.join("hand.stop")).unwrap();
+        fs::create_dir_all(dir.join("hand.stop")).unwrap();
+        assert_eq!(ctl.stop_reason_resolved(), "guardian");
+        // No applied record: the generic default.
+        fs::remove_file(dir.join("hand.stopped")).unwrap();
+        assert_eq!(ctl.stop_reason_resolved(), "hand.stop");
         let _ = fs::remove_dir_all(&dir);
     }
 }
