@@ -1209,17 +1209,39 @@ fn proof_8_13(ctx: &mut Ctx) -> Proof {
     // false). The valid trigger is an EXCLUSIVE lock: a PowerShell
     // holder opens the stop file with FileShare::None, so every
     // open/delete attempt by the supervisor fails with a sharing
-    // violation. Order matters: the stop is filed while IDLE first
-    // (the worker may apply it — harmless), the holder locks it,
-    // the lock is confirmed by probing, and only THEN the command
-    // starts — command start cannot consume the locked stop (the
-    // honesty fix reports it as NOT cleared), and the monitor loop
-    // retries the bounded consumption and arms the stop.
+    // violation.
+    // (run-51 lesson) the stop must be APPLIED by the worker
+    // (recorded in `hand.stopped` with reason "ttl") BEFORE the
+    // holder locks the file. The monitor's reason fallback
+    // (`stop_reason_resolved`) reads that record when the file is
+    // unreadable — but if the lock lands first, the worker's own
+    // first poll resolves the reason to the default "hand.stop"
+    // (no record exists yet) and WRITES that wrong reason into
+    // `hand.stopped`, poisoning the fallback for the monitor too.
+    // Run 51 armed generically with flag false for exactly this
+    // reason, with values identical to run 50. So: file the stop,
+    // WAIT for the worker to apply it, and only then lock it.
     // Clean pre-existing state first so the only stopped record that
     // can exist afterwards is this leg's own.
     let _ = fs::remove_file(ctx.data_dir.join("hand.stopped"));
     let _ = ctx.ctl.clear_stop();
     let _ = ctx.ctl.write_stop("ttl");
+    let applied = wait_until(
+        || {
+            ctx.ctl
+                .stopped_info()
+                .and_then(|v| {
+                    v.get("reason")
+                        .and_then(|r| r.as_str())
+                        .map(|s| s.to_string())
+                })
+                == Some("ttl".to_string())
+        },
+        Duration::from_secs(10),
+    );
+    if !applied {
+        return fail(json!({"reason": "worker never applied the idle ttl stop before the lock"}));
+    }
     let stop_path = ctx.data_dir.join("hand.stop");
     let stop_path_str = stop_path.to_string_lossy().to_string();
     let mut holder = match ProcCommand::new("powershell")
