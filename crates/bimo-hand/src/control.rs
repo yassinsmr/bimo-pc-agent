@@ -29,6 +29,12 @@ use std::time::{Duration, Instant};
 
 pub const STOP_FILE: &str = "hand.stop";
 pub const STOPPED_FILE: &str = "hand.stopped";
+/// The running command's identity, published by the supervisor at
+/// command start (`{"id","kind","started_ts"}`) and removed at command
+/// end. Council 35 cond. 1: the single arming authority — the worker
+/// loop consults the TTL exemption against this kind, the same rule
+/// the supervisor's monitor loop consults.
+pub const CURRENT_COMMAND_FILE: &str = "hand.current-command.json";
 pub const HEARTBEAT_FILE: &str = "hand.heartbeat";
 pub const HEARTBEAT_JSON: &str = "hand.heartbeat.json";
 pub const SUPERVISOR_HEARTBEAT: &str = "supervisor.heartbeat";
@@ -104,6 +110,36 @@ impl HandControl {
 
     pub fn stopped_info(&self) -> Option<Value> {
         read_json_file(&self.path(STOPPED_FILE))
+    }
+
+    /// Remove `hand.stopped` only when its recorded reason matches.
+    /// Council 35 cond. 1 (defence in depth): when the supervisor's
+    /// monitor loop ignores a TTL stop, a `hand.stopped` the worker may
+    /// already have written for that same TTL event must not be left
+    /// behind to contradict the survived run. Returns true when a
+    /// record was removed. A non-matching record is never touched.
+    pub fn clear_stopped_if_reason(&self, reason: &str) -> Result<bool, String> {
+        let p = self.path(STOPPED_FILE);
+        let recorded = self
+            .stopped_info()
+            .and_then(|v| v.get("reason").and_then(|r| r.as_str()).map(|s| s.to_string()));
+        match recorded {
+            Some(r) if r == reason => {
+                fs::remove_file(p).map_err(|e| e.to_string())?;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    /// The kind of the command currently running, if the supervisor
+    /// published one. `None` when idle or when the record is absent
+    /// or unparsable (a torn write is read as "no command" — the
+    /// caller then falls back to the pre-c81 behaviour of applying
+    /// the stop).
+    pub fn current_command_kind(&self) -> Option<String> {
+        read_json_file(&self.path(CURRENT_COMMAND_FILE))
+            .and_then(|v| v.get("kind").and_then(|k| k.as_str()).map(|s| s.to_string()))
     }
 
     // -- heartbeat ------------------------------------------------------
@@ -325,6 +361,39 @@ mod tests {
         fs::write(ctl.path(PAUSE_HEARTBEAT_FILE), "").unwrap();
         assert!(!ctl.write_heartbeat().unwrap());
         assert!(ctl.heartbeat_ts().is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn current_command_kind_round_trip_and_absent() {
+        let dir = test_dir();
+        let ctl = HandControl::new(&dir, 2);
+        assert_eq!(ctl.current_command_kind(), None);
+        write_json_file(
+            &ctl.path(CURRENT_COMMAND_FILE),
+            &json!({"id": "x", "kind": "update", "started_ts": 1}),
+        )
+        .unwrap();
+        assert_eq!(ctl.current_command_kind().as_deref(), Some("update"));
+        // Torn/unparsable record reads as "no command".
+        fs::write(ctl.path(CURRENT_COMMAND_FILE), "{not json").unwrap();
+        assert_eq!(ctl.current_command_kind(), None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn clear_stopped_if_reason_only_removes_matching() {
+        let dir = test_dir();
+        let ctl = HandControl::new(&dir, 2);
+        // Absent record: nothing removed.
+        assert!(!ctl.clear_stopped_if_reason("ttl").unwrap());
+        ctl.apply_stop("ttl").unwrap();
+        // Non-matching reason: kept.
+        assert!(!ctl.clear_stopped_if_reason("hand.stop").unwrap());
+        assert!(ctl.stopped_info().is_some());
+        // Matching reason: removed.
+        assert!(ctl.clear_stopped_if_reason("ttl").unwrap());
+        assert!(ctl.stopped_info().is_none());
         let _ = fs::remove_dir_all(&dir);
     }
 }

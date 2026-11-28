@@ -995,7 +995,10 @@ fn msi_request(ctx: &Ctx, id: &str, msi: &str, uninstall: bool, install_dir: &st
     wait_exec_result(&ctx.data_dir, id, Duration::from_secs(600))
 }
 
-/// 8.12 TTL STOP EXEMPTS A RUNNING UPDATE (council 34 cond. 3, c80).
+/// 8.12 TTL STOP EXEMPTS A RUNNING UPDATE (council 34 cond. 3, c80;
+/// hardened by council 35 cond. 1, c81: a SECOND TTL stop in the same
+/// run is ignored too, and the proof asserts the side-effect files —
+/// `hand.stopped` absent, heartbeat present — not just the JSON).
 /// Positive: a running command of kind "update" survives a TTL stop
 /// filed mid-run (completes `done`, `ttl_stop_ignored: true`).
 /// Control: the same stop kills a running command of kind "install"
@@ -1046,16 +1049,28 @@ fn proof_8_12(ctx: &mut Ctx) -> Proof {
     }
     std::thread::sleep(Duration::from_millis(2000));
     let _ = ctx.ctl.write_stop("ttl");
+    // Council 35 cond. 1: a SECOND TTL stop in the same run must be
+    // ignored too (the first stop spared the update; a repeated TTL
+    // event must not kill it). Filed ~2 s after the first, while the
+    // ~14 s ping is still running.
+    std::thread::sleep(Duration::from_millis(2000));
+    let _ = ctx.ctl.write_stop("ttl");
     let result_update = wait_exec_result(&ctx.data_dir, "ttl-exempt-update-1", Duration::from_secs(60));
     let _ = ctx.ctl.clear_stop();
-    let (status_u, ignored_u, exit_u) = match &result_update {
+    let (status_u, ignored_u, ignored_count_u, exit_u) = match &result_update {
         Some(r) => (
             r.get("status").and_then(|v| v.as_str()).unwrap_or("").to_string(),
             r.get("ttl_stop_ignored").and_then(|v| v.as_bool()).unwrap_or(false),
+            r.get("ttl_stop_ignored_count").and_then(|v| v.as_u64()).unwrap_or(0),
             r.get("exit_code").and_then(|v| v.as_u64()),
         ),
-        None => ("no-result".to_string(), false, None),
+        None => ("no-result".to_string(), false, 0, None),
     };
+    // Council 35 cond. 1: the side-effect files must agree with the
+    // JSON — no `hand.stopped` left behind by the worker loop, and the
+    // heartbeat still beating after both ignored stops.
+    let stopped_absent = !ctx.data_dir.join("hand.stopped").exists();
+    let heartbeat_present = ctx.data_dir.join("hand.heartbeat.json").exists();
     // --- Control: kind "install" (generic loop) IS killed by a TTL stop. ---
     let req_install = ExecRequest {
         id: "ttl-kills-install-1".to_string(),
@@ -1093,10 +1108,149 @@ fn proof_8_12(ctx: &mut Ctx) -> Proof {
         None => ("no-result".to_string(), None),
     };
     let measured = json!({
-        "update": {"status": status_u, "ttl_stop_ignored": ignored_u, "exit_code": exit_u},
+        "update": {"status": status_u, "ttl_stop_ignored": ignored_u, "ttl_stop_ignored_count": ignored_count_u, "exit_code": exit_u, "hand_stopped_absent": stopped_absent, "heartbeat_present": heartbeat_present},
         "control_install": {"status": status_i, "stop_ms": stop_ms_i},
     });
-    if status_u == "done" && ignored_u && exit_u == Some(0) && status_i == "stopped" {
+    if status_u == "done" && ignored_u && ignored_count_u == 2 && exit_u == Some(0) && stopped_absent && heartbeat_present && status_i == "stopped" {
+        pass(measured)
+    } else {
+        fail(measured)
+    }
+}
+
+/// 8.13 STALE STOP CONSUMED + UNREMOVABLE STOP ARMS (council 35
+/// conds. 2 and 3, c81).
+/// Leg A (cond. 2): a TTL stop filed while idle — before the command
+/// starts, with a stale `hand.stopped` record as the worker would
+/// have written — is consumed at command start: a healthy `install`
+/// completes `done` (it would be killed by the same stop mid-run),
+/// the result records `stale_stop_cleared: "ttl"`, and no
+/// `hand.stopped` is left behind.
+/// Leg B (cond. 3): when the stop file cannot be removed (made
+/// read-only on Windows, where `remove_file` then fails), the
+/// monitor loop must NOT spin forever with no result — after the
+/// bounded retries it arms the stop: the update ends `stopped` with
+/// `ttl_stop_clear_failed: true` and a result JSON exists.
+fn proof_8_13(ctx: &mut Ctx) -> Proof {
+    if !cfg!(windows) {
+        return inconclusive(json!({"reason": "not-windows"}));
+    }
+    if !ctx.supervisor_started {
+        return fail(json!({"reason": "supervisor did not start"}));
+    }
+    let ping_args = || {
+        vec![
+            "/c".to_string(),
+            "ping".to_string(),
+            "-n".to_string(),
+            "15".to_string(),
+            "127.0.0.1".to_string(),
+        ]
+    };
+    // --- Leg A: stale stop filed while idle. ---
+    let _ = ctx.ctl.write_stop("ttl");
+    let _ = ctx.ctl.apply_stop("ttl");
+    let req_stale = ExecRequest {
+        id: "stale-stop-install-1".to_string(),
+        kind: "install".to_string(),
+        program: "cmd.exe".to_string(),
+        args: ping_args(),
+        working_dir: None,
+        cleanup_path: None,
+        install_dir: None,
+        grandchild_out: None,
+        installer_kind: None,
+        product_code: None,
+        name_substring: None,
+        expected_sha256: None,
+        targetdir: None,
+    };
+    if write_exec_request(&ctx.data_dir, &req_stale).is_err() {
+        return fail(json!({"reason": "could not write exec request (stale leg)"}));
+    }
+    if !wait_file(
+        &exec_started_path(&ctx.data_dir, "stale-stop-install-1"),
+        Duration::from_secs(30),
+    ) {
+        return fail(json!({"reason": "stale leg run never started"}));
+    }
+    let result_stale = wait_exec_result(&ctx.data_dir, "stale-stop-install-1", Duration::from_secs(60));
+    let _ = ctx.ctl.clear_stop();
+    let (status_a, cleared_a, exit_a) = match &result_stale {
+        Some(r) => (
+            r.get("status").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            r.get("stale_stop_cleared").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            r.get("exit_code").and_then(|v| v.as_u64()),
+        ),
+        None => ("no-result".to_string(), None, None),
+    };
+    let stopped_absent_a = !ctx.data_dir.join("hand.stopped").exists();
+    let stop_absent_a = !ctx.data_dir.join("hand.stop").exists();
+    // --- Leg B: stop file that cannot be removed. ---
+    let req_fail = ExecRequest {
+        id: "ttl-clear-fail-update-1".to_string(),
+        kind: "update".to_string(),
+        program: "cmd.exe".to_string(),
+        args: ping_args(),
+        working_dir: None,
+        cleanup_path: None,
+        install_dir: None,
+        grandchild_out: None,
+        installer_kind: Some("winget".to_string()),
+        product_code: None,
+        name_substring: None,
+        expected_sha256: None,
+        targetdir: None,
+    };
+    if write_exec_request(&ctx.data_dir, &req_fail).is_err() {
+        return fail(json!({"reason": "could not write exec request (clear-fail leg)"}));
+    }
+    if !wait_file(
+        &exec_started_path(&ctx.data_dir, "ttl-clear-fail-update-1"),
+        Duration::from_secs(30),
+    ) {
+        return fail(json!({"reason": "clear-fail leg run never started"}));
+    }
+    std::thread::sleep(Duration::from_millis(2000));
+    let _ = ctx.ctl.write_stop("ttl");
+    // Read-only on Windows makes `remove_file` fail, so every
+    // `clear_stop` in the monitor loop errors.
+    let stop_path = ctx.data_dir.join("hand.stop");
+    let mut perms = match fs::metadata(&stop_path) {
+        Ok(m) => m.permissions(),
+        Err(e) => return fail(json!({"reason": format!("stop file metadata failed: {}", e)})),
+    };
+    perms.set_readonly(true);
+    if fs::set_permissions(&stop_path, perms).is_err() {
+        return fail(json!({"reason": "could not make stop file read-only"}));
+    }
+    let result_fail = wait_exec_result(&ctx.data_dir, "ttl-clear-fail-update-1", Duration::from_secs(60));
+    // Cleanup: restore writability, remove the stop and the stopped
+    // record the arming wrote, so the next proof starts clean.
+    if let Ok(m) = fs::metadata(&stop_path) {
+        let mut p = m.permissions();
+        p.set_readonly(false);
+        let _ = fs::set_permissions(&stop_path, p);
+    }
+    let _ = fs::remove_file(&stop_path);
+    let _ = fs::remove_file(ctx.data_dir.join("hand.stopped"));
+    let _ = ctx.ctl.clear_stop();
+    let (status_b, clear_failed_b, stop_ms_b) = match &result_fail {
+        Some(r) => (
+            r.get("status").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            r.get("ttl_stop_clear_failed").and_then(|v| v.as_bool()).unwrap_or(false),
+            r.get("stop_ms").and_then(|v| v.as_u64()),
+        ),
+        None => ("no-result".to_string(), false, None),
+    };
+    let measured = json!({
+        "stale_leg": {"status": status_a, "stale_stop_cleared": cleared_a, "exit_code": exit_a, "hand_stopped_absent": stopped_absent_a, "hand_stop_absent": stop_absent_a},
+        "clear_fail_leg": {"status": status_b, "ttl_stop_clear_failed": clear_failed_b, "stop_ms": stop_ms_b},
+    });
+    if status_a == "done" && cleared_a.as_deref() == Some("ttl") && exit_a == Some(0)
+        && stopped_absent_a && stop_absent_a
+        && status_b == "stopped" && clear_failed_b && stop_ms_b.is_some()
+    {
         pass(measured)
     } else {
         fail(measured)
@@ -1422,6 +1576,7 @@ fn main() {
     let p810b = proof_8_10b(&mut ctx);
     let p810a = proof_8_10a(&mut ctx);
     let p812 = proof_8_12(&mut ctx);
+    let p813 = proof_8_13(&mut ctx);
     let p81 = proof_8_1(&mut ctx);
     let p811 = proof_8_11(&mut ctx);
     let p89 = proof_8_9(&mut ctx);
@@ -1456,7 +1611,7 @@ fn main() {
         _ => "not-tested",
     };
     let all = [
-        &p81, &p82, &p82b, &p83, &p84, &p85, &p86, &p87, &p88, &p89, &p810a, &p810b, &p811, &p812,
+        &p81, &p82, &p82b, &p83, &p84, &p85, &p86, &p87, &p88, &p89, &p810a, &p810b, &p811, &p812, &p813,
     ];
     let all_pass = all.iter().all(|p| p.status == "pass");
     let any_fail = all.iter().any(|p| p.status == "fail");
@@ -1476,6 +1631,7 @@ fn main() {
     proofs.insert("8.10b".to_string(), p810b.to_json());
     proofs.insert("8.11".to_string(), p811.to_json());
     proofs.insert("8.12".to_string(), p812.to_json());
+    proofs.insert("8.13".to_string(), p813.to_json());
     let report = json!({
         "verdict": verdict,
         "red_line": red_line,

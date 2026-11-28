@@ -212,6 +212,23 @@ fn run_worker(data_dir: &Path, heartbeat_secs: u64) {
         }
         if ctl.stop_present() {
             let reason = ctl.stop_reason().unwrap_or_else(|| "hand.stop".to_string());
+            // Council 35 cond. 1 (single arming authority, c81): the
+            // worker consults the same TTL exemption the monitor loop
+            // consults, keyed on the running command's kind published
+            // by the supervisor in `hand.current-command.json`. A TTL
+            // stop for an exempt kind is NEVER applied here — the
+            // monitor loop consumes it. No current command (idle) or
+            // an unreadable record => apply as before (fail-closed
+            // toward stopping; the monitor loop's defence-in-depth
+            // cleanup covers the exempt case).
+            if reason == "ttl" {
+                if let Some(kind) = ctl.current_command_kind() {
+                    if bimo_hand::update::ttl_kill_exempt(&kind) {
+                        std::thread::sleep(Duration::from_millis(250));
+                        continue;
+                    }
+                }
+            }
             let _ = ctl.apply_stop(&reason);
         } else if last_beat.elapsed() >= Duration::from_secs(heartbeat_secs) {
             if ctl.write_heartbeat().unwrap_or(false) {
@@ -399,7 +416,7 @@ fn read_action_trigger(data_dir: &Path, id: &str) -> Option<String> {
 /// blocked, and stops the install through kill::abort only. It never
 /// launches msiexec.exe as a process to kill it, never kills msiexec.exe,
 /// and never runs `net stop msiserver`.
-fn handle_msi_request(req: &ExecRequest, ctl: &HandControl, data_dir: &Path, started_at: Instant) -> bool {
+fn handle_msi_request(req: &ExecRequest, ctl: &HandControl, data_dir: &Path, started_at: Instant, stale_stop: Option<&str>) -> bool {
     let msi_path = req.args.iter().find(|a| a.to_ascii_lowercase().ends_with(".msi")).cloned().unwrap_or_default();
     let name_substring = req.name_substring.clone().unwrap_or_default();
     let target_dir = req.install_dir.clone().unwrap_or_default();
@@ -444,6 +461,7 @@ fn handle_msi_request(req: &ExecRequest, ctl: &HandControl, data_dir: &Path, sta
                 "remaining_pids": outcome.remaining_pids, "handles_released": outcome.handles_released,
                 "return_code": outcome.return_code, "forced_ms": outcome.forced_ms,
                 "abort": outcome.to_json(), "pre_command_state": pre_state,
+                "stale_stop_cleared": stale_stop,
                 // (c78 merge note: the branch's "supervisor_rehash" line
                 // is NOT carried here — main has no rehash variable; the
                 // supervisor rehash gate is a branch-only defence-in-depth
@@ -476,6 +494,7 @@ fn handle_msi_request(req: &ExecRequest, ctl: &HandControl, data_dir: &Path, sta
                 "remaining_pids": outcome.remaining_pids, "handles_released": outcome.handles_released,
                 "return_code": outcome.return_code, "forced_ms": outcome.forced_ms,
                 "abort": outcome.to_json(), "pre_command_state": pre_state,
+                "stale_stop_cleared": stale_stop,
                 "duration_ms": started_at.elapsed().as_millis() as u64,
             }));
             return false;
@@ -495,6 +514,7 @@ fn handle_msi_request(req: &ExecRequest, ctl: &HandControl, data_dir: &Path, sta
                 "id": req.id, "status": status, "return_code": o.return_code,
                 "cancel_ms": o.cancel_ms, "handler_calls": o.handler_calls,
                 "pre_command_state": pre_state,
+                "stale_stop_cleared": stale_stop,
                 "duration_ms": started_at.elapsed().as_millis() as u64,
             }));
             return false;
@@ -503,11 +523,82 @@ fn handle_msi_request(req: &ExecRequest, ctl: &HandControl, data_dir: &Path, sta
     }
 }
 
+/// Council 35 cond. 2 (c81): consume a stop filed before this
+/// command started. A stop present at command start is stale by
+/// definition — the command it could have armed against is not this
+/// one — so it is cleared (with a matching `hand.stopped` record, so
+/// the on-disk state cannot contradict the fresh run) and its reason
+/// is returned for the result JSON. A stop filed AFTER the command
+/// starts is never touched here; the monitor loop arms it normally.
+/// Returns `None` when no stop was present.
+fn consume_stale_stop(ctl: &HandControl) -> Option<String> {
+    if !ctl.stop_present() {
+        return None;
+    }
+    let reason = ctl.stop_reason().unwrap_or_else(|| "hand.stop".to_string());
+    let _ = ctl.clear_stop();
+    let _ = ctl.clear_stopped_if_reason(&reason);
+    Some(reason)
+}
+
+/// Council 35 cond. 3 (c81): bounded consumption of an ignored TTL
+/// stop. `failures` counts consecutive failed `clear_stop` attempts
+/// for the current stop file.
+const TTL_CLEAR_MAX_RETRIES: u32 = 3;
+
+enum IgnoredStopOutcome {
+    /// The stop file was consumed; the run survives.
+    Consumed,
+    /// Consumption failed this poll; retry on the next poll.
+    Retry,
+    /// Consumption failed `TTL_CLEAR_MAX_RETRIES` times; arm the stop
+    /// instead of spinning the monitor loop forever with no result.
+    Arm,
+}
+
+fn consume_ignored_ttl_stop(ctl: &HandControl, failures: &mut u32) -> IgnoredStopOutcome {
+    match ctl.clear_stop() {
+        Ok(()) => {
+            *failures = 0;
+            IgnoredStopOutcome::Consumed
+        }
+        Err(_) => {
+            *failures += 1;
+            if *failures >= TTL_CLEAR_MAX_RETRIES {
+                IgnoredStopOutcome::Arm
+            } else {
+                IgnoredStopOutcome::Retry
+            }
+        }
+    }
+}
+
 fn handle_request(
     job: &sup::Job,
     data_dir: &Path,
     req: &ExecRequest,
     supervisor_elevated: bool,
+) -> bool {
+    let ctl = HandControl::new(data_dir, 30);
+    // Council 35 cond. 2: consume a stale stop before launch.
+    let stale_stop = consume_stale_stop(&ctl);
+    // Council 35 cond. 1: publish the running command's kind so the
+    // worker loop consults the same TTL exemption as the monitor loop.
+    let _ = write_json_file(
+        &data_dir.join(bimo_hand::control::CURRENT_COMMAND_FILE),
+        &json!({"id": req.id, "kind": req.kind, "started_ts": utc_now_secs()}),
+    );
+    let result = handle_request_inner(job, data_dir, req, supervisor_elevated, stale_stop.as_deref());
+    let _ = fs::remove_file(data_dir.join(bimo_hand::control::CURRENT_COMMAND_FILE));
+    result
+}
+
+fn handle_request_inner(
+    job: &sup::Job,
+    data_dir: &Path,
+    req: &ExecRequest,
+    supervisor_elevated: bool,
+    stale_stop: Option<&str>,
 ) -> bool {
     let ctl = HandControl::new(data_dir, 30);
     let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("bimo-hand-supervisor.exe"));
@@ -539,7 +630,7 @@ fn handle_request(
     // dispatch guarantees MSI requests are kind "install" (never
     // exempt), so no check is needed in `handle_msi_request`.
     if req.kind == "install" && req.installer_kind.as_deref() == Some("msi") {
-        return handle_msi_request(req, &ctl, data_dir, started_at);
+        return handle_msi_request(req, &ctl, data_dir, started_at, stale_stop);
     }
     let launched = match sup::launch_in_job(
         job,
@@ -551,7 +642,7 @@ fn handle_request(
         Err(e) => {
             let _ = write_json_file(
                 &exec_result_path(data_dir, &req.id),
-                &json!({"status": "failed", "error": e, "supervisor_elevated": supervisor_elevated}),
+                &json!({"status": "failed", "error": e, "supervisor_elevated": supervisor_elevated, "stale_stop_cleared": stale_stop}),
             );
             return false;
         }
@@ -572,9 +663,15 @@ fn handle_request(
         }),
     );
     let mut stop_initiated = false;
-    // Council 34 cond. 3 (TTL dead letter, wired c80): counts TTL stops
-    // this run survived because its kind is exempt.
+    // Council 34 cond. 3 (TTL dead letter, wired c80; hardened c81):
+    // counts TTL stops this run survived because its kind is exempt.
     let mut ttl_stop_ignored = false;
+    let mut ttl_stop_ignored_count: u32 = 0;
+    // Council 35 cond. 3: consecutive failed `clear_stop` attempts
+    // for the current stop; at TTL_CLEAR_MAX_RETRIES the stop is
+    // armed instead of ignored.
+    let mut ttl_clear_failures: u32 = 0;
+    let mut ttl_stop_clear_failed = false;
     let mut grandchild_checked = false;
     loop {
         // Probe 8.5: once the grandchild pid file exists, verify the
@@ -616,6 +713,7 @@ exe_path: root_exe_path.clone(),
                                 "tree_dead": outcome.tree_dead,
                                 "supervisor_elevated": supervisor_elevated,
                                 "installer_elevated": installer_elevated,
+                                "stale_stop_cleared": stale_stop,
                                 "duration_ms": started_at.elapsed().as_millis() as u64,
                             }),
                         );
@@ -626,18 +724,39 @@ exe_path: root_exe_path.clone(),
         }
         if ctl.stop_present() {
             let reason = ctl.stop_reason().unwrap_or_else(|| "hand.stop".to_string());
-            // Council 34 cond. 3 (TTL dead letter, wired c80): a TTL stop
-            // never kills a running `update` — this arming path consults
+            // Council 34 cond. 3 (TTL dead letter, wired c80; single
+            // arming authority c81): a TTL stop never kills a running
+            // `update` — this arming path consults
             // `update::ttl_kill_exempt(req.kind)` before arming. The
-            // spent TTL stop is consumed so it cannot kill the next
-            // command, and the ignore is recorded in the result JSON
-            // (`ttl_stop_ignored`). Any other reason, or a non-exempt
-            // kind, arms the stop exactly as before.
+            // worker loop consults the same rule against the published
+            // current-command kind, so it never writes `hand.stopped`
+            // for an ignored stop; the removal below is defence in
+            // depth for a stop the worker applied before the rule was
+            // consulted. The spent TTL stop is consumed so it cannot
+            // kill the next command, and the ignore is recorded in
+            // the result JSON (`ttl_stop_ignored` + count). Any other
+            // reason, or a non-exempt kind, arms the stop exactly as
+            // before. Council 35 cond. 3: when the stop file cannot be
+            // removed, retries are bounded — after TTL_CLEAR_MAX_RETRIES
+            // the stop is armed instead of ignored, and the arming is
+            // recorded (`ttl_stop_clear_failed`).
             if reason == "ttl" && bimo_hand::update::ttl_kill_exempt(&req.kind) {
-                let _ = ctl.clear_stop();
-                ttl_stop_ignored = true;
-                std::thread::sleep(Duration::from_millis(100));
-                continue;
+                match consume_ignored_ttl_stop(&ctl, &mut ttl_clear_failures) {
+                    IgnoredStopOutcome::Consumed => {
+                        ttl_stop_ignored = true;
+                        ttl_stop_ignored_count += 1;
+                        let _ = ctl.clear_stopped_if_reason("ttl");
+                        std::thread::sleep(Duration::from_millis(100));
+                        continue;
+                    }
+                    IgnoredStopOutcome::Retry => {
+                        std::thread::sleep(Duration::from_millis(100));
+                        continue;
+                    }
+                    IgnoredStopOutcome::Arm => {
+                        ttl_stop_clear_failed = true;
+                    }
+                }
             }
             stop_initiated = true;
             let _ = ctl.apply_stop(&reason);
@@ -678,6 +797,8 @@ exe_path: root_exe_path.clone(),
                     "remaining_pids": outcome.remaining_pids,
                     "handles_released": outcome.handles_released,
                     "partial_cleaned": partial_cleaned,
+                    "ttl_stop_clear_failed": ttl_stop_clear_failed,
+                    "stale_stop_cleared": stale_stop,
 "abort": abort_json,
                     "supervisor_elevated": supervisor_elevated,
                     "installer_elevated": installer_elevated,
@@ -695,11 +816,16 @@ exe_path: root_exe_path.clone(),
                     "status": if code == 0 { "done" } else { "failed" },
                     "exit_code": code,
                     "handles_released": handles_released,
-                    // Council 34 cond. 3 (c80): true when a TTL stop was
-                    // filed mid-run and ignored because this kind is
-                    // exempt — the observable proof the arming path
-                    // consulted `ttl_kill_exempt`.
+                    // Council 34 cond. 3 (c80; hardened c81): true when
+                    // a TTL stop was filed mid-run and ignored because
+                    // this kind is exempt — the observable proof the
+                    // arming path consulted `ttl_kill_exempt`. The
+                    // count is the number of TTL stops ignored this
+                    // run (council 35 cond. 1 wants a second stop in
+                    // the same run proved too).
                     "ttl_stop_ignored": ttl_stop_ignored,
+                    "ttl_stop_ignored_count": ttl_stop_ignored_count,
+                    "stale_stop_cleared": stale_stop,
                     "supervisor_elevated": supervisor_elevated,
                     "installer_elevated": installer_elevated,
                     "duration_ms": started_at.elapsed().as_millis() as u64,
@@ -711,5 +837,89 @@ exe_path: root_exe_path.clone(),
             return stop_initiated;
         }
         std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn test_dir() -> PathBuf {
+        let n = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!(
+            "bimo-hand-sup-test-{}-{}",
+            std::process::id(),
+            n
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn ignored_ttl_stop_consumed_and_counter_reset() {
+        let dir = test_dir();
+        let ctl = HandControl::new(&dir, 2);
+        ctl.write_stop("ttl").unwrap();
+        let mut failures = 0u32;
+        assert!(matches!(
+            consume_ignored_ttl_stop(&ctl, &mut failures),
+            IgnoredStopOutcome::Consumed
+        ));
+        assert_eq!(failures, 0);
+        assert!(!ctl.stop_present());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ignored_ttl_stop_arms_after_bounded_retries() {
+        let dir = test_dir();
+        let ctl = HandControl::new(&dir, 2);
+        // A directory in place of the stop file makes every
+        // `clear_stop` fail (remove_file on a directory errors).
+        fs::create_dir_all(dir.join("hand.stop")).unwrap();
+        let mut failures = 0u32;
+        assert!(matches!(
+            consume_ignored_ttl_stop(&ctl, &mut failures),
+            IgnoredStopOutcome::Retry
+        ));
+        assert_eq!(failures, 1);
+        assert!(matches!(
+            consume_ignored_ttl_stop(&ctl, &mut failures),
+            IgnoredStopOutcome::Retry
+        ));
+        assert_eq!(failures, 2);
+        assert!(matches!(
+            consume_ignored_ttl_stop(&ctl, &mut failures),
+            IgnoredStopOutcome::Arm
+        ));
+        assert_eq!(failures, TTL_CLEAR_MAX_RETRIES);
+        // A later success resets the counter.
+        fs::remove_dir_all(dir.join("hand.stop")).unwrap();
+        ctl.write_stop("ttl").unwrap();
+        assert!(matches!(
+            consume_ignored_ttl_stop(&ctl, &mut failures),
+            IgnoredStopOutcome::Consumed
+        ));
+        assert_eq!(failures, 0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn stale_stop_consumed_with_matching_stopped_record() {
+        let dir = test_dir();
+        let ctl = HandControl::new(&dir, 2);
+        ctl.write_stop("ttl").unwrap();
+        ctl.apply_stop("ttl").unwrap();
+        assert_eq!(consume_stale_stop(&ctl).as_deref(), Some("ttl"));
+        assert!(!ctl.stop_present());
+        assert!(ctl.stopped_info().is_none());
+        // Nothing present: None.
+        assert_eq!(consume_stale_stop(&ctl), None);
+        let _ = fs::remove_dir_all(&dir);
     }
 }

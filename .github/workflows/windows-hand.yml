@@ -1,5 +1,5 @@
 # Windows Hand (Unit 3 Part 4): build + test bimo-hand, run the self-test
-# (proofs 8.1-8.12, red-line verdict), publish hand-self-test.json to
+# (proofs 8.1-8.13, red-line verdict), publish hand-self-test.json to
 # the spike-results branch and upload the results as an artifact.
 # Mirrors .github/workflows/windows-eye.yml.
 #
@@ -48,7 +48,7 @@ jobs:
           git add Cargo.lock
           git diff --cached --quiet
           if ($LASTEXITCODE -ne 0) {
-            git commit -m "hand(c40): regenerate Cargo.lock for bimo-hand"
+            git commit -m "hand: regenerate Cargo.lock for bimo-hand"
             git push origin HEAD:${{ github.ref_name }}
           }
 
@@ -92,7 +92,7 @@ jobs:
             git add hand-self-test.json
             git diff --cached --quiet
             if ($LASTEXITCODE -ne 0) {
-              git commit -m "hand(c40): hand-self-test.json from run ${{ github.run_number }}"
+              git commit -m "hand: hand-self-test.json from run ${{ github.run_number }}"
               git push origin spike-results
             }
           }
