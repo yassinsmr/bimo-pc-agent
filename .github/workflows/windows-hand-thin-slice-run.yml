@@ -164,13 +164,36 @@
 
 name: windows-hand-thin-slice-run
 
-# NOTE (cycle 69): `workflow_dispatch` ONLY. The temporary `push`
-# trigger was removed after slice run 11 fired (run 46097424541).
-# GitHub's web UI lists workflows from the default branch only, and
-# this file lives on hand-thin-slice-c50 — so it cannot be dispatched
-# from the UI, and no API token exists on this machine (gh is not
-# logged in; the GitHub connector returns 403).
+# REGRESSION GATE (cycle 70, council 27 condition 1 — PERMANENT):
+# the `push` trigger below is the slice's future-run mechanism. It is
+# NOT temporary: it stays armed on this branch so that any later push
+# touching the slice re-runs it on real Windows. A `schedule` (cron)
+# trigger was REJECTED as the mechanism: scheduled workflows only run
+# from the default branch, and this file lives on hand-thin-slice-c50.
+# The push trigger is the only workable automatic mechanism;
+# workflow_dispatch stays as the manual fallback (the web UI lists
+# workflows from the default branch only, so dispatch from the UI is
+# impossible, and no API token exists on this machine).
+# REOPEN RULE (council 27): any later run whose verdict is not `pass`
+# reopens M5 (the thin slice) IMMEDIATELY — the unit returns to open
+# and no further slice run happens without a new council. The cycle-55
+# cap ("do not re-add the push trigger") applied to the SPIKE workflow
+# (windows-hand-thin-slice.yml) only and is superseded here by council 27.
+# Paths: only files the slice run consumes (built crates bimo-eye /
+# bimo-hand / bimo-shot, the lockfile, this workflow, the sourced
+# helper script). bimo-core is NOT a dependency of any built crate,
+# so it is excluded on purpose — a change there cannot affect this run.
 on:
+  push:
+    branches: [hand-thin-slice-c50]
+    paths:
+      - .github/workflows/windows-hand-thin-slice-run.yml
+      - crates/bimo-eye/**
+      - crates/bimo-hand/**
+      - crates/bimo-shot/**
+      - Cargo.toml
+      - Cargo.lock
+      - .github/scripts/**
   workflow_dispatch:
 
 permissions:
