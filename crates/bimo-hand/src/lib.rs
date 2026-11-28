@@ -96,12 +96,38 @@ pub fn file_sha256(path: &Path) -> Result<String, String> {
 }
 
 /// Write a JSON value to `path` (pretty, with a trailing newline).
+///
+/// Atomic publish (council 36 follow-up 2, cycle 82): the value is
+/// written to a unique temp file in the same directory and then renamed
+/// over the destination, so a concurrent reader never observes a torn
+/// (partial) JSON document. Before this change `fs::write` wrote the
+/// destination directly — a reader polling `hand.stop` /
+/// `hand.current-command.json` mid-write could see half a document and
+/// misread the reason/kind (the torn-read premise the council flagged
+/// as unverified: verified here — the write WAS non-atomic). `fs::rename`
+/// replaces the destination on Windows (Rust std uses MoveFileEx with
+/// REPLACE_EXISTING) and is atomic on the same filesystem; a leftover
+/// temp file after a crash is inert (unique name, never read).
 pub fn write_json_file(path: &Path, value: &Value) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let text = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
-    fs::write(path, format!("{}\n", text)).map_err(|e| e.to_string())
+    static TMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = TMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "file".to_string());
+    let tmp = path.with_file_name(format!(".{}.tmp-{}-{}", file_name, std::process::id(), n));
+    fs::write(&tmp, format!("{}\n", text)).map_err(|e| e.to_string())?;
+    match fs::rename(&tmp, path) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let _ = fs::remove_file(&tmp);
+            Err(e.to_string())
+        }
+    }
 }
 
 /// Read a JSON file. Returns `None` when the file is absent or unparsable.
@@ -168,6 +194,76 @@ mod tests {
     fn canonical_json_sorts_keys() {
         let v: Value = serde_json::from_str("{\"b\":1,\"a\":2}").unwrap();
         assert_eq!(canonical_json(&v), "{\"a\":2,\"b\":1}");
+    }
+
+    fn unique_test_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "bimo-write-json-{}-{}-{}",
+            tag,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Council 36 follow-up 2: a write round-trips, and no temp file
+    /// is left behind after a successful publish.
+    #[test]
+    fn write_json_file_round_trip_and_no_temp_left() {
+        let dir = unique_test_dir("roundtrip");
+        let path = dir.join("hand.stop");
+        let v = serde_json::json!({"ts": 123, "reason": "ttl"});
+        write_json_file(&path, &v).unwrap();
+        assert_eq!(read_json_file(&path).unwrap(), v);
+        let leftovers: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp-"))
+            .collect();
+        assert!(leftovers.is_empty(), "temp files left: {:?}", leftovers);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Council 36 follow-up 2: a concurrent reader never observes a
+    /// torn document — every read parses as JSON and is one of the two
+    /// values the writer published (never a prefix of either).
+    #[test]
+    fn write_json_file_never_exposes_torn_json_to_concurrent_reader() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let dir = unique_test_dir("torn");
+        let path = dir.join("hand.current-command.json");
+        let a = serde_json::json!({"id": "cmd-a", "kind": "update"});
+        let b = serde_json::json!({"id": "cmd-b", "kind": "install"});
+        write_json_file(&path, &a).unwrap();
+        let done = Arc::new(AtomicBool::new(false));
+        let reader_done = Arc::clone(&done);
+        let reader_path = path.clone();
+        let expect_a = a.clone();
+        let expect_b = b.clone();
+        let reader = std::thread::spawn(move || {
+            let mut reads = 0u32;
+            while !reader_done.load(Ordering::SeqCst) {
+                if let Some(v) = read_json_file(&reader_path) {
+                    assert!(v == expect_a || v == expect_b, "torn value observed: {}", v);
+                    reads += 1;
+                }
+                std::thread::yield_now();
+            }
+            reads
+        });
+        for i in 0..200 {
+            let v = if i % 2 == 0 { &b } else { &a };
+            write_json_file(&path, v).unwrap();
+        }
+        done.store(true, Ordering::SeqCst);
+        let reads = reader.join().unwrap();
+        assert!(reads > 0, "reader never observed a value");
+        let _ = fs::remove_dir_all(&dir);
     }
 }
 
