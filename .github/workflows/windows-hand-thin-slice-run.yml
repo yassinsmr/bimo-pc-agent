@@ -136,17 +136,14 @@
 
 name: windows-hand-thin-slice-run
 
-# NOTE (cycle 67): `workflow_dispatch` + a TEMPORARY `push` trigger
-# for ONE push (slice run 9, council 24 R1–R5). The push trigger is
-# removed immediately after run 9 fires, as in cycles 60–66.
+# NOTE (cycle 67): `workflow_dispatch` ONLY. The temporary `push`
+# trigger was removed after slice run 9 fired (run 46087595559).
 # GitHub's web UI lists workflows from the default branch only, and
 # this file lives on hand-thin-slice-c50 — so it cannot be dispatched
 # from the UI, and no API token exists on this machine (gh is not
 # logged in; the GitHub connector returns 403).
 on:
   workflow_dispatch:
-  push:
-    branches: [hand-thin-slice-c50]
 
 permissions:
   contents: write
