@@ -137,6 +137,18 @@
 # M5 closes when run 15 is green (council 31). No third stress run without a
 # new council.
 #
+# THRESHOLD PIN (cycle 74, council 32 condition 2): the 5 s nominal settle
+# threshold is the value the run-13 truncation fix rests on, and every slice
+# run is blind to it by construction (no injection) — so a silent revert to
+# 4 s would pass every run green. The S-THRESHOLD-PIN step below pins it:
+# it reads the settle-loop line out of THIS file, requires exactly one match
+# and the value 5, and fails the run loud before anything is armed. The value
+# is passed to S8 and recorded as settle_threshold_secs in slice-results.json,
+# so every future run is a witness of the threshold it ran with. Run 15's
+# nominal quiet was 5.311 s (decision minus truncated last-raw ts); the REAL
+# quiet is only bounded, above 4.311 s and at most 5.311 s — the 5.311 figure
+# is nominal, never a real-quiet measurement (council 32 condition 1).
+#
 # Execution order note: the spec numbers S4 (witness), S5 (shot),
 # S6 (strong evidence) in that order, but S4's window needs s6_ts
 # (written by S6) and S5 runs after S6 (§29.3). The live step
@@ -302,6 +314,32 @@ jobs:
           if (-not $check.fits) { throw "S0-ceiling FAIL: worst-case budget ${total}s exceeds job timeout ${jobTimeoutSecs}s — live step not started" }
           Write-Host "S0-ceiling pass"
 
+      - name: S-THRESHOLD-PIN settle-loop check (council 32, cond. 2)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          # THRESHOLD PIN (cycle 74, council 32 condition 2): reads the
+          # settle-loop threshold line out of THIS workflow file, requires
+          # exactly one match and the value 5, and fails the run loud
+          # before anything is armed. Three anchors, all required on the
+          # same line — the settle-loop variable, a "-ge <digits>"
+          # threshold, and the settle-break assignment — so no other
+          # "-ge 5" anywhere can satisfy it. The value is passed to S8
+          # via GITHUB_ENV and recorded as settle_threshold_secs in
+          # slice-results.json; threshold-pin.json is uploaded as
+          # evidence. NOTE: this step's own source cannot match itself —
+          # its pattern lines carry "([0-9]+)", not digits, after "-ge ".
+          $wfPath = "$env:GITHUB_WORKSPACE\.github\workflows\windows-hand-thin-slice-run.yml"
+          $wfLines = Get-Content $wfPath
+          $hits = @($wfLines | Where-Object { $_ -match '\$quietSince' -and $_ -match '-ge ([0-9]+)' -and $_ -match '\$settled = \$true' })
+          if ($hits.Count -ne 1) { throw "threshold pin FAIL: expected exactly 1 settle-loop threshold line, found $($hits.Count)" }
+          $m = [regex]::Match($hits[0], '-ge ([0-9]+)')
+          $thr = [int]$m.Groups[1].Value
+          if ($thr -ne 5) { throw "threshold pin FAIL: settle threshold is $thr, expected 5" }
+          "THRESHOLD_PIN_SECS=$thr" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          @{ settle_threshold_secs = $thr; source = "settle-loop line in windows-hand-thin-slice-run.yml"; checked_at_step = "S-THRESHOLD-PIN" } | ConvertTo-Json | Out-File -FilePath "$env:SLICE_DIR\threshold-pin.json" -Encoding utf8
+          Write-Host "threshold pin: settle threshold is $thr s"
+
       - name: S-LIVE all phases in ONE live step (council 17, S1)
         shell: pwsh
         timeout-minutes: 42
@@ -311,6 +349,12 @@ jobs:
           $sliceDir = $env:SLICE_DIR
           $eyeData = $env:EYE_DATA
           $handData = $env:HAND_DATA
+          # THRESHOLD PIN guard (cycle 74, council 32 cond. 2): the pin
+          # step must have run and passed its value through GITHUB_ENV.
+          # A missing value fails the live step before anything is
+          # armed — never emit a verdict without the threshold field.
+          if ($null -eq $env:THRESHOLD_PIN_SECS -or $env:THRESHOLD_PIN_SECS -eq "") { Fail "S-LIVE FAIL: THRESHOLD_PIN_SECS missing — the S-THRESHOLD-PIN step did not run" }
+          $thresholdSecs = [int]$env:THRESHOLD_PIN_SECS
           $logPath = "$eyeData\eye-events.jsonl"
           $eyeProc = $null; $eyePid = $null; $eyeLaunchTs = $null
           $eyeExitCode = $null; $eyeExitTs = $null; $eyeKilledByStop = $false
@@ -909,6 +953,7 @@ jobs:
               diag = $diagF
               checkpoints = $checkpoints
               timeout_check = $timeoutCheck
+              settle_threshold_secs = $thresholdSecs
               eye_exit = @{ pid = $eyePid; exit_code = $eyeExitCode; exited_on_stop = $eyeStoppedOk; alive_before_stop = $eyeAliveBeforeStop; killed_by_stop = $eyeKilledByStop; lifetime = $eyeLifetimeDisplay }
               m5_note = "does not prove eye survival outside a live step nor device performance"
               restructure_note = "single-live-step restructure built on one unreplicated positive control (diagnostic run (a)); a slice-3 success must not be read back as proof that run (a) replicates"
@@ -956,6 +1001,7 @@ jobs:
             ${{ env.SLICE_DIR }}\msi-install.log
             ${{ env.SLICE_DIR }}\slice-checkpoints.json
             ${{ env.SLICE_DIR }}\slice-timeout-check.json
+            ${{ env.SLICE_DIR }}\threshold-pin.json
             ${{ env.SLICE_DIR }}\gpg-version.txt
             ${{ env.SLICE_DIR }}\gpg-keyserver-attempt1.stderr
             ${{ env.SLICE_DIR }}\gpg-keyserver-attempt2.stderr
