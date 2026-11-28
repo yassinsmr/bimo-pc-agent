@@ -151,10 +151,11 @@ pub fn check_file_hash(path: &str, expected: Option<&str>) -> Result<(), String>
 }
 
 /// Build the supervisor request that reverts an `update`: reinstall the
-/// OLD version via winget (design §4). The revert target must be
-/// available at execution time (cond. 3); `revert-unverifiable` is
-/// refused here — the command never executes without Yassin's explicit
-/// approval (the executor gate in `prepare_execution`).
+/// OLD version via winget (design §4). The revert target's availability
+/// is the STORED plan claim, re-read here but not re-verified live
+/// (council 34 cond. 3, struck c80); `revert-unverifiable` is refused
+/// here — the command never executes without Yassin's explicit approval
+/// (the executor gate in `prepare_execution`).
 /// Executed through the supervisor like any command (winget has no
 /// in-process API); `revert()` in revert.rs points here.
 pub fn revert_update_request(cmd: &Command) -> Result<ExecRequest, String> {
@@ -319,9 +320,9 @@ pub fn prepare_execution(
         let uargs = parse_update_args(cmd)?;
         // Cond. 1: TTL blocks acceptance only — the generic
         // `is_expired` check above IS the acceptance check; no TTL
-        // kill is ever armed for a running update (see
-        // `update::ttl_kill_exempt`; the worker consults it before
-        // arming any TTL stop).
+        // kill is ever armed for a running update — the supervisor's
+        // exec monitor consults `update::ttl_kill_exempt` before
+        // arming any TTL stop (council 34 cond. 3, wired c80).
         // Cond. 3: revert-unverifiable needs Yassin's explicit
         // approval (phone channel); until then the command stays queued.
         if revert_availability(&cmd.revert_plan) == RevertAvailability::Unverifiable

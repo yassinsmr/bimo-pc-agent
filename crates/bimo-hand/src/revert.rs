@@ -34,8 +34,10 @@ pub enum RevertOutcome {
 /// - organize: a `moves` list with original paths + checksums.
 /// - transfer: `source` + `destination` (+ `source_checksum`).
 /// - update (council 28 cond. 3): winget id + old version + a revert
-///   target that is available (old version still published, re-checked
-///   at execution) or a saved official installer (path + sha256).
+///   target that is available (old version still published per the
+///   stored plan — re-read, not re-verified live, at execution:
+///   council 34 cond. 3, struck c80) or a saved official installer
+///   (path + sha256).
 ///   A plan with neither is `revert-unverifiable` — valid as a plan
 ///   (it is recorded), but the command does NOT execute without
 ///   Yassin's explicit approval (executor gate).

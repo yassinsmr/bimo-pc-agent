@@ -534,6 +534,10 @@ fn handle_request(
         _ => (req.program.clone(), req.args.clone()),
     };
     let started_at = Instant::now();
+    // Council 34 cond. 3 (c80): the TTL exemption (`ttl_kill_exempt`)
+    // is consulted only in the generic monitor loop below — this
+    // dispatch guarantees MSI requests are kind "install" (never
+    // exempt), so no check is needed in `handle_msi_request`.
     if req.kind == "install" && req.installer_kind.as_deref() == Some("msi") {
         return handle_msi_request(req, &ctl, data_dir, started_at);
     }
@@ -568,6 +572,9 @@ fn handle_request(
         }),
     );
     let mut stop_initiated = false;
+    // Council 34 cond. 3 (TTL dead letter, wired c80): counts TTL stops
+    // this run survived because its kind is exempt.
+    let mut ttl_stop_ignored = false;
     let mut grandchild_checked = false;
     loop {
         // Probe 8.5: once the grandchild pid file exists, verify the
@@ -618,8 +625,21 @@ exe_path: root_exe_path.clone(),
             }
         }
         if ctl.stop_present() {
-            stop_initiated = true;
             let reason = ctl.stop_reason().unwrap_or_else(|| "hand.stop".to_string());
+            // Council 34 cond. 3 (TTL dead letter, wired c80): a TTL stop
+            // never kills a running `update` — this arming path consults
+            // `update::ttl_kill_exempt(req.kind)` before arming. The
+            // spent TTL stop is consumed so it cannot kill the next
+            // command, and the ignore is recorded in the result JSON
+            // (`ttl_stop_ignored`). Any other reason, or a non-exempt
+            // kind, arms the stop exactly as before.
+            if reason == "ttl" && bimo_hand::update::ttl_kill_exempt(&req.kind) {
+                let _ = ctl.clear_stop();
+                ttl_stop_ignored = true;
+                std::thread::sleep(Duration::from_millis(100));
+                continue;
+            }
+            stop_initiated = true;
             let _ = ctl.apply_stop(&reason);
             let install_dir = req.install_dir.as_deref().map(Path::new);
             let _ = job;
@@ -675,6 +695,11 @@ exe_path: root_exe_path.clone(),
                     "status": if code == 0 { "done" } else { "failed" },
                     "exit_code": code,
                     "handles_released": handles_released,
+                    // Council 34 cond. 3 (c80): true when a TTL stop was
+                    // filed mid-run and ignored because this kind is
+                    // exempt — the observable proof the arming path
+                    // consulted `ttl_kill_exempt`.
+                    "ttl_stop_ignored": ttl_stop_ignored,
                     "supervisor_elevated": supervisor_elevated,
                     "installer_elevated": installer_elevated,
                     "duration_ms": started_at.elapsed().as_millis() as u64,

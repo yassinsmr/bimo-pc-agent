@@ -995,6 +995,114 @@ fn msi_request(ctx: &Ctx, id: &str, msi: &str, uninstall: bool, install_dir: &st
     wait_exec_result(&ctx.data_dir, id, Duration::from_secs(600))
 }
 
+/// 8.12 TTL STOP EXEMPTS A RUNNING UPDATE (council 34 cond. 3, c80).
+/// Positive: a running command of kind "update" survives a TTL stop
+/// filed mid-run (completes `done`, `ttl_stop_ignored: true`).
+/// Control: the same stop kills a running command of kind "install"
+/// through the same generic monitor loop (status `stopped`).
+/// NOTE: the stand-in program is `cmd.exe /c ping` — this proves the
+/// supervisor's TTL arming path consults the KIND, not that winget
+/// itself survives (that is the condition-2 dry run).
+fn proof_8_12(ctx: &mut Ctx) -> Proof {
+    if !cfg!(windows) {
+        return inconclusive(json!({"reason": "not-windows"}));
+    }
+    if !ctx.supervisor_started {
+        return fail(json!({"reason": "supervisor did not start"}));
+    }
+    let ping_args = || {
+        vec![
+            "/c".to_string(),
+            "ping".to_string(),
+            "-n".to_string(),
+            "15".to_string(),
+            "127.0.0.1".to_string(),
+        ]
+    };
+    // --- Positive: kind "update" survives a TTL stop. ---
+    let req_update = ExecRequest {
+        id: "ttl-exempt-update-1".to_string(),
+        kind: "update".to_string(),
+        program: "cmd.exe".to_string(),
+        args: ping_args(),
+        working_dir: None,
+        cleanup_path: None,
+        install_dir: None,
+        grandchild_out: None,
+        installer_kind: Some("winget".to_string()),
+        product_code: None,
+        name_substring: None,
+        expected_sha256: None,
+        targetdir: None,
+    };
+    if write_exec_request(&ctx.data_dir, &req_update).is_err() {
+        return fail(json!({"reason": "could not write exec request (update)"}));
+    }
+    if !wait_file(
+        &exec_started_path(&ctx.data_dir, "ttl-exempt-update-1"),
+        Duration::from_secs(30),
+    ) {
+        return fail(json!({"reason": "update run never started"}));
+    }
+    std::thread::sleep(Duration::from_millis(2000));
+    let _ = ctx.ctl.write_stop("ttl");
+    let result_update = wait_exec_result(&ctx.data_dir, "ttl-exempt-update-1", Duration::from_secs(60));
+    let _ = ctx.ctl.clear_stop();
+    let (status_u, ignored_u, exit_u) = match &result_update {
+        Some(r) => (
+            r.get("status").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            r.get("ttl_stop_ignored").and_then(|v| v.as_bool()).unwrap_or(false),
+            r.get("exit_code").and_then(|v| v.as_u64()),
+        ),
+        None => ("no-result".to_string(), false, None),
+    };
+    // --- Control: kind "install" (generic loop) IS killed by a TTL stop. ---
+    let req_install = ExecRequest {
+        id: "ttl-kills-install-1".to_string(),
+        kind: "install".to_string(),
+        program: "cmd.exe".to_string(),
+        args: ping_args(),
+        working_dir: None,
+        cleanup_path: None,
+        install_dir: None,
+        grandchild_out: None,
+        installer_kind: None,
+        product_code: None,
+        name_substring: None,
+        expected_sha256: None,
+        targetdir: None,
+    };
+    if write_exec_request(&ctx.data_dir, &req_install).is_err() {
+        return fail(json!({"reason": "could not write exec request (control)"}));
+    }
+    if !wait_file(
+        &exec_started_path(&ctx.data_dir, "ttl-kills-install-1"),
+        Duration::from_secs(30),
+    ) {
+        return fail(json!({"reason": "control run never started"}));
+    }
+    std::thread::sleep(Duration::from_millis(2000));
+    let _ = ctx.ctl.write_stop("ttl");
+    let result_install = wait_exec_result(&ctx.data_dir, "ttl-kills-install-1", Duration::from_secs(60));
+    let _ = ctx.ctl.clear_stop();
+    let (status_i, stop_ms_i) = match &result_install {
+        Some(r) => (
+            r.get("status").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            r.get("stop_ms").and_then(|v| v.as_u64()),
+        ),
+        None => ("no-result".to_string(), None),
+    };
+    let measured = json!({
+        "update": {"status": status_u, "ttl_stop_ignored": ignored_u, "exit_code": exit_u},
+        "control_install": {"status": status_i, "stop_ms": stop_ms_i},
+    });
+    if status_u == "done" && ignored_u && exit_u == Some(0) && status_i == "stopped" {
+        pass(measured)
+    } else {
+        fail(measured)
+    }
+}
+
 /// 8.1 ELEVATED MSI KILL — RED LINE.
 fn proof_8_1(ctx: &mut Ctx) -> Proof {
 // v2 (cycle 42): proof on VLC only -- Firefox was removed because
@@ -1313,6 +1421,7 @@ fn main() {
     let p82b = proof_8_2b(&mut ctx);
     let p810b = proof_8_10b(&mut ctx);
     let p810a = proof_8_10a(&mut ctx);
+    let p812 = proof_8_12(&mut ctx);
     let p81 = proof_8_1(&mut ctx);
     let p811 = proof_8_11(&mut ctx);
     let p89 = proof_8_9(&mut ctx);
@@ -1347,7 +1456,7 @@ fn main() {
         _ => "not-tested",
     };
     let all = [
-        &p81, &p82, &p82b, &p83, &p84, &p85, &p86, &p87, &p88, &p89, &p810a, &p810b, &p811,
+        &p81, &p82, &p82b, &p83, &p84, &p85, &p86, &p87, &p88, &p89, &p810a, &p810b, &p811, &p812,
     ];
     let all_pass = all.iter().all(|p| p.status == "pass");
     let any_fail = all.iter().any(|p| p.status == "fail");
@@ -1366,6 +1475,7 @@ fn main() {
     proofs.insert("8.10a".to_string(), p810a.to_json());
     proofs.insert("8.10b".to_string(), p810b.to_json());
     proofs.insert("8.11".to_string(), p811.to_json());
+    proofs.insert("8.12".to_string(), p812.to_json());
     let report = json!({
         "verdict": verdict,
         "red_line": red_line,

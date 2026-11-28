@@ -22,12 +22,15 @@
 //! before + event present) is REPEALED.
 //!
 //! Council 28, condition 3 — revert proven at execution time:
-//! the old version's availability is re-checked AT EXECUTION, not only
-//! at registration; silent download to the old version must be proven
-//! on the runner for the test package; uninstall+reinstall counts as a
-//! revert only if it is proven to preserve settings/saves or declares
-//! what it loses — otherwise `revert-unverifiable` and no execution
-//! without Yassin's explicit approval (phone-notification channel).
+//! the old version's availability is a STORED claim from registration,
+//! re-read at execution but NOT re-verified live (council 34 cond. 3,
+//! struck c80; a live `winget show` probe is open follow-up work tied
+//! to the condition-2 dry run). Silent download to the old version must
+//! be proven on the runner for the test package; uninstall+reinstall
+//! counts as a revert only if it is proven to preserve settings/saves
+//! or declares what it loses — otherwise `revert-unverifiable` and no
+//! execution without Yassin's explicit approval (phone-notification
+//! channel).
 //! Automatic revert is allowed ONLY for the three named pre-execution
 //! safe failure patterns; everything else is explicit (`revert <id>`),
 //! never automatic on an unknown-cause failure.
@@ -191,8 +194,9 @@ pub fn new_update_command(
 
 /// True when the command's TTL has expired AT ACCEPTANCE time.
 /// Condition 1: TTL blocks acceptance only — it never kills a running
-/// execution. The worker must consult [`ttl_kill_exempt`] before arming
-/// any TTL stop; for `update` no TTL stop is ever armed.
+/// execution. The supervisor's exec monitor consults [`ttl_kill_exempt`]
+/// before arming any TTL stop (council 34 cond. 3, wired c80); for
+/// `update` no TTL stop is ever armed.
 pub fn acceptance_expired(cmd: &Command, now_secs: u64) -> bool {
     crate::queue::is_expired(cmd, now_secs)
 }
@@ -354,11 +358,16 @@ pub fn auto_revert_allowed(f: &UpdateFailure) -> bool {
     }
 }
 
-/// Availability of the revert target at EXECUTION time (cond. 3).
-/// Re-checked at execution, not only at registration.
+/// Availability of the revert target (cond. 3) — a STORED claim from
+/// registration, re-read at execution but NOT re-verified live
+/// (council 34 cond. 3, struck c80: no `winget show` probe runs at
+/// execution; a live probe is open follow-up work tied to the
+/// condition-2 dry run). Staleness surfaces at revert time as
+/// `revert_failed` + escalation (see `revert::revert`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RevertAvailability {
-    /// The old version is still published (re-checked at execution).
+    /// The old version was still published when the plan was recorded
+    /// (stored claim; not re-verified at execution).
     Available,
     /// A saved official installer of the old version, with its hash.
     SavedInstaller { path: String, sha256: String },

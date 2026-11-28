@@ -1,5 +1,5 @@
 # Windows Hand (Unit 3 Part 4): build + test bimo-hand, run the self-test
-# (proofs 8.1-8.10b, red-line verdict), publish hand-self-test.json to
+# (proofs 8.1-8.12, red-line verdict), publish hand-self-test.json to
 # the spike-results branch and upload the results as an artifact.
 # Mirrors .github/workflows/windows-eye.yml.
 #

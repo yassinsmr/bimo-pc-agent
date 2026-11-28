@@ -6,12 +6,16 @@
 //! is mandatory. 50 MB rotation, 30-day retention.
 //!
 //! Semantics (decided, and documented here):
-//! - TTL is the total lifetime from `issued_ts` (waiting + execution). A
-//!   command that exceeds its TTL while running is killed and marked
-//!   `expired` (not `failed`) — EXCEPT for kind `update`: council 28
-//!   condition 1 settles that TTL blocks ACCEPTANCE only and never kills
-//!   a running `update` execution (see `update::ttl_kill_exempt`; the
-//!   worker must consult it before arming any TTL stop).
+//! - TTL is the total lifetime from `issued_ts` (waiting + execution).
+//!   A command whose TTL expires before acceptance never executes
+//!   (marked `expired`). A running command is NEVER killed by TTL
+//!   expiry alone — no automatic TTL watchdog exists in v1; a TTL stop
+//!   arrives only as an explicit `hand.stop` filing (reason "ttl"),
+//!   and the supervisor's exec monitor consults
+//!   `update::ttl_kill_exempt` before arming it, so a running `update`
+//!   survives a TTL stop (council 28 cond. 1; wired council 34
+//!   cond. 3, c80; proof 8.12). A non-exempt kind killed by a filed
+//!   TTL stop is marked `stopped`, not `expired`.
 //! - `dedup_key` is `v1:<kind>:<sha256(canonical args)>`. The same key while
 //!   queued/running makes the second command `duplicate`, never executed.
 //!   After completion the key stays in the persisted dedup window
