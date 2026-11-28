@@ -8,15 +8,24 @@
 //! Semantics (decided, and documented here):
 //! - TTL is the total lifetime from `issued_ts` (waiting + execution). A
 //!   command that exceeds its TTL while running is killed and marked
-//!   `expired` (not `failed`).
+//!   `expired` (not `failed`) — EXCEPT for kind `update`: council 28
+//!   condition 1 settles that TTL blocks ACCEPTANCE only and never kills
+//!   a running `update` execution (see `update::ttl_kill_exempt`; the
+//!   worker must consult it before arming any TTL stop).
 //! - `dedup_key` is `v1:<kind>:<sha256(canonical args)>`. The same key while
 //!   queued/running makes the second command `duplicate`, never executed.
 //!   After completion the key stays in the persisted dedup window
 //!   (`hand.dedup.json`, 24 h), so a replay after completion is still
-//!   `duplicate` (replay protection).
+//!   `duplicate` (replay protection). EXCEPTION: `update` commands use
+//!   the design-form key `update:<package>:<frozen-version>`
+//!   (`update::update_dedup_key`, council 28 condition 1).
 //! - States: `queued -> running -> done | failed | expired | duplicate |
 //!   reverted | stopped | revert_failed | needs_approval |
-//!   blocked_guardian_absent | blocked_eicar`.
+//!   blocked_guardian_absent | blocked_eicar | partial | needs_restart`.
+//!   `partial` and `needs_restart` are `update` states (council 28
+//!   condition 4): `partial` = killed mid-update, version neither old
+//!   nor new; `needs_restart` = the installer asked for a restart
+//!   (never `done`).
 //! - `stopped` means killed by a stop. It is NEVER auto-resumed; it needs
 //!   an explicit re-queue with a new id.
 //! - Commands come only from the secure link (Unit 1); the local queue is
