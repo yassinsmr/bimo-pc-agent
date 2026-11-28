@@ -126,6 +126,19 @@
 # check advisory. A missing raw log fails LOUDLY at settle start —
 # never mistake a missing log for a quiet tree.
 #
+# S4 STRESS TEST (cycle 71, council 27 condition 2 + council 28
+# inherited executive item, design §9 — ONE RUN ONLY): a late file
+# event is injected INSIDE the settle window (a background job that
+# fires ~2 s into the window, once) to test whether the settle
+# resets or the decision issues on a stale snapshot. The injector
+# job starts inside S-LIVE just before the settle loop; the stress
+# verdict is computed in S8 and folded into the run verdict. A stress
+# FAIL ("decision on a stale snapshot") reopens M5 immediately with
+# no new council (council 27 condition 2); an inconclusive stress
+# run is never a pass. After this run fires, the injector is REMOVED
+# in the next commit (the stress test is one-shot, not a permanent
+# part of the slice) — the removal push fires a normal regression run.
+#
 # Execution order note: the spec numbers S4 (witness), S5 (shot),
 # S6 (strong evidence) in that order, but S4's window needs s6_ts
 # (written by S6) and S5 runs after S6 (§29.3). The live step
@@ -146,7 +159,9 @@
 # itself carries timeout-minutes: 42 as a backstop (raised from 40 in
 # cycle 68: the S4 settle cap adds 30 s to the worst case, 2430 s ->
 # 2460 s, which would otherwise exceed the 40-minute live-step
-# backstop; the job timeout stays 45 minutes). If the live step
+# backstop; cycle 71 stress adds the 30 s injector-job wait,
+# 2460 s -> 2490 s, margin 210 s; the job timeout stays 45 minutes).
+# If the live step
 # is killed by its timeout, no verdict JSON is published — the run
 # fails loudly with no verdict, and the (ephemeral) runner machine
 # is discarded with whatever install state it holds.
@@ -259,7 +274,7 @@ jobs:
             @{ item = "S1 GPG + Authenticode + P/Invoke"; secs = 120 }
             @{ item = "Phase 1 install (S2+S3)"; secs = 600 }
             @{ item = "S-DIAG capture (listing + registry + MSI log)"; secs = 60 }
-            @{ item = "S6 + S4 + S5 (incl. S4 settle cap 30 s, council 25)"; secs = 210 }
+            @{ item = "S6 + S4 + S5 (incl. S4 settle cap 30 s, council 25; cycle 71 stress: +30 s injector-job wait)"; secs = 240 }
             @{ item = "S7 revert"; secs = 600 }
             @{ item = "stop eye + S8 assemble/publish"; secs = 180 }
           )
@@ -289,6 +304,7 @@ jobs:
           $handData = $env:HAND_DATA
           $logPath = "$eyeData\eye-events.jsonl"
           $eyeProc = $null; $eyePid = $null; $eyeLaunchTs = $null
+          $injectJob = $null; $injectRecordPath = $null
           $eyeExitCode = $null; $eyeExitTs = $null; $eyeKilledByStop = $false
           $eyeAliveBeforeStop = $null; $eyeStoppedOk = $false
           $s3Succeeded = $false
@@ -706,6 +722,64 @@ jobs:
             if (-not (Test-Path $rawLogPath)) { Fail "S4 settle fail: raw log missing: $rawLogPath (the settle cannot be measured — never mistake a missing log for a quiet tree)" }
             $settleStartTs = [DateTimeOffset]::UtcNow
             $settleDeadline = $settleStartTs.AddSeconds(30)
+            # --- S4 STRESS injector (cycle 71, design §9 — ONE RUN ONLY) ---
+            # A background job that injects ONE late file event inside
+            # the settle window: it fires when BOTH (a) >= 2.0 s have
+            # passed since settle start and (b) the raw log shows
+            # >= 2.0 s of quiet (same filter as the settle loop).
+            # Self-contained parsing (no parent-session functions) and
+            # a 25 s deadline; if the window never opens it exits
+            # without injecting and the run is inconclusive, never a pass.
+            # The job is waited on in S-STRESS (after the S4 read) and
+            # stopped first in the finally block on the failure path,
+            # so a late injection can never pollute the S7 clean check.
+            $injectFileName = "late-inject-$env:GITHUB_RUN_ID.txt"
+            $injectPath = "$env:SLICE_INSTALL_DIR\$injectFileName"
+            $injectRecordPath = "$sliceDir\late-inject.json"
+            $injectJobScript = {
+              param($settleStartIso, $rawLog, $injPath, $recPath, $watchParent, $probePrefix, $runId)
+              $settleStart = [DateTimeOffset]::Parse($settleStartIso)
+              $deadline = [DateTimeOffset]::UtcNow.AddSeconds(25)
+              $injected = $false
+              $injectTs = $null
+              $lastRawBefore = $null
+              while ([DateTimeOffset]::UtcNow -lt $deadline) {
+                $sinceSettle = ([DateTimeOffset]::UtcNow - $settleStart).TotalSeconds
+                $lastTs = $null
+                if (Test-Path $rawLog) {
+                  try {
+                    $tailLines = Get-Content $rawLog -Tail 500 -ErrorAction Stop
+                    foreach ($ln in $tailLines) {
+                      try { $ev = $ln | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+                      if ($ev.type -eq "raw.event" -and $ev.kind -match "^(Create|Modify|Remove)") {
+                        $hit = $false
+                        foreach ($p in $ev.paths) {
+                          if ($p -like "$watchParent*" -and $p -notlike "$probePrefix*") { $hit = $true; break }
+                        }
+                        if ($hit) {
+                          $ts = [DateTimeOffset]::Parse($ev.ts)
+                          if ($null -eq $lastTs -or $ts -gt $lastTs) { $lastTs = $ts }
+                        }
+                      }
+                    }
+                  } catch {}
+                }
+                if ($null -ne $lastTs) { $lastRawBefore = $lastTs }
+                $quiet = if ($null -ne $lastTs) { ([DateTimeOffset]::UtcNow - $lastTs).TotalSeconds } else { 9999 }
+                if ($sinceSettle -ge 2.0 -and $quiet -ge 2.0) {
+                  try {
+                    "late-inject $runId $([DateTimeOffset]::UtcNow.ToString('o'))" | Out-File -FilePath $injPath -Encoding utf8
+                    $injectTs = [DateTimeOffset]::UtcNow
+                    $injected = $true
+                  } catch {}
+                  break
+                }
+                Start-Sleep -Milliseconds 200
+              }
+              @{ injected = $injected; inject_ts = $(if ($null -ne $injectTs) { $injectTs.ToString("o") } else { $null }); path = $injPath; settle_start_ts = $settleStartIso; last_raw_event_ts_before_inject = $(if ($null -ne $lastRawBefore) { $lastRawBefore.ToString("o") } else { $null }) } | ConvertTo-Json | Out-File -FilePath $recPath -Encoding utf8
+            }
+            $injectJob = Start-Job -ScriptBlock $injectJobScript -ArgumentList $settleStartTs.ToString("o"), $rawLogPath, $injectPath, $injectRecordPath, $env:WATCH_PARENT, $w.probe_prefix, $env:GITHUB_RUN_ID
+            Write-Host "S4 stress: injector job started (id $($injectJob.Id))"
             $settleCapHit = $false
             $lastRawFileEventTs = $null
             $quietSince = $settleStartTs
@@ -746,6 +820,23 @@ jobs:
             $wit | ConvertTo-Json | Out-File -FilePath "$sliceDir\witness.json" -Encoding utf8
             if ($wit.status -ne "pass") { Fail "S4 fail: $($wit.reason)" }
             Write-Host "S4 pass: $($hits.Count) install.detected event(s) in the window"
+            # --- S-STRESS wait for the injector job (cycle 71, design §9) ---
+            # The job exits on its own after one injection or at its
+            # 25 s deadline; wait for it here so late-inject.json
+            # exists before S8 computes the stress verdict. A missing
+            # record is NOT fabricated: S8 reads it as injected=false
+            # (inconclusive). The wait is bounded (30 s) and sits
+            # inside the S0-ceiling S4 budget line (240 s).
+            Write-Checkpoint "S-STRESS" "enter"
+            if ($null -ne $injectJob) {
+              Wait-Job $injectJob -Timeout 30 | Out-Null
+              $injectRecordPresent = Test-Path $injectRecordPath
+              try { Remove-Job $injectJob -Force -ErrorAction SilentlyContinue } catch {}
+              $injectJob = $null
+              Write-Host "S-STRESS: injector job waited+removed; late-inject.json present=$injectRecordPresent"
+            } else {
+              Write-Host "S-STRESS: no injector job was started (record missing — S8 will call it inconclusive)"
+            }
             # --- S5 shot ---
             Write-Checkpoint "S5" "enter"
             $shotExe = "$env:GITHUB_WORKSPACE\target\x86_64-pc-windows-msvc\release\bimo-shot-self-test.exe"
@@ -756,6 +847,16 @@ jobs:
             $liveError = $_.Exception.Message
             Write-Host "S-LIVE phase error: $liveError"
           } finally {
+            # Stop the injector job FIRST (cycle 71 stress): on the
+            # failure path S4 may have thrown while the job was still
+            # armed; a late injection during S7 would recreate the
+            # install dir and fake an S7 failure. Tolerates a null or
+            # already-removed job (success path removed it in S-STRESS).
+            if ($null -ne $injectJob) {
+              try { Stop-Job $injectJob -ErrorAction SilentlyContinue } catch {}
+              try { Remove-Job $injectJob -Force -ErrorAction SilentlyContinue } catch {}
+              $injectJob = $null
+            }
             # --- S7 revert (mandatory when S3 succeeded) ---
             Write-Checkpoint "S7" "enter-finally"
             $s7 = $null
@@ -841,6 +942,60 @@ jobs:
             if ($null -eq $shot) { $verdict = "fail"; $reasons += "shot-missing (R6)" }
             if ($null -ne $s7F -and $s7F.status -eq "fail") { $verdict = "fail"; $reasons += "s7-failed: $($s7F.reason)" }
             if ($null -ne $s7F -and $s7F.status -eq "skipped" -and $s3Succeeded) { $verdict = "fail"; $reasons += "s7-skipped-but-s3-succeeded" }
+            # S-STRESS verdict (cycle 71, design §9 — literal criteria):
+            # pass ⟺ injected ∧ no cap ∧ last-raw ≥ inject−2s ∧
+            # decision−last-raw ≥ 4.0s ∧ eye saw the injected path by
+            # the S4 read ∧ slice verdict pass. A stress FAIL is the
+            # named "decision on a stale snapshot" → M5 reopens
+            # immediately (council 27 condition 2); an inconclusive
+            # stress run is never a pass. The slice verdict is read
+            # FIRST: a non-pass slice makes the stress run invalid
+            # (inconclusive), never a stress pass.
+            $injectRec = Read-JsonOrNull "$sliceDir\late-inject.json"
+            $stressStatus = "inconclusive"; $stressReason = $null
+            $stressEvidence = @{ injected = $false; inject_ts = $null; inject_path = $null; eye_saw_injected = $null; eye_injected_event_ts = $null; last_raw_file_event_ts = $null; settle_decision_ts = $null; quiet_after_inject_secs = $null; settle_cap_hit = $null }
+            if ($verdict -ne "pass") {
+              $stressReason = "stress-inconclusive: slice verdict is $verdict (stress run invalid as a stress test)"
+            } elseif ($null -eq $injectRec) {
+              $stressReason = "stress-inconclusive: late-inject.json missing (injector job produced no record)"
+            } elseif (-not $injectRec.injected) {
+              $stressReason = "stress-inconclusive: no injection within 25 s (no settle window observed)"
+            } else {
+              $stressEvidence.injected = $true
+              $stressEvidence.inject_ts = $injectRec.inject_ts
+              $stressEvidence.inject_path = $injectRec.path
+              $injectTs = [DateTimeOffset]::Parse($injectRec.inject_ts)
+              $eyeNow = Read-EyeLog -Path $logPath
+              $injHits = @($eyeNow | Where-Object { $_.path -eq $injectRec.path })
+              if ($injHits.Count -gt 0) {
+                $stressEvidence.eye_saw_injected = $true
+                $stressEvidence.eye_injected_event_ts = (($injHits | ForEach-Object { [DateTimeOffset]::Parse($_.ts) } | Sort-Object | Select-Object -Last 1)).ToString("o")
+              } else { $stressEvidence.eye_saw_injected = $false }
+              $lastRawTs = $null
+              if ($null -ne $witF -and $null -ne $witF.last_raw_file_event_ts) { $lastRawTs = [DateTimeOffset]::Parse($witF.last_raw_file_event_ts) }
+              $decTs = $null
+              if ($null -ne $witF -and $null -ne $witF.settle_decision_ts) { $decTs = [DateTimeOffset]::Parse($witF.settle_decision_ts) }
+              $capHit = ($null -ne $witF -and $witF.settle_cap_hit -eq $true)
+              $s4ReadTs = $null
+              if ($null -ne $witF -and $null -ne $witF.s4_read_ts) { $s4ReadTs = [DateTimeOffset]::Parse($witF.s4_read_ts) }
+              $eyeTs = $null
+              if ($stressEvidence.eye_saw_injected -and $null -ne $stressEvidence.eye_injected_event_ts) { $eyeTs = [DateTimeOffset]::Parse($stressEvidence.eye_injected_event_ts) }
+              $quietAfterInject = if ($null -ne $lastRawTs -and $null -ne $decTs) { ($decTs - $lastRawTs).TotalSeconds } else { $null }
+              $stressEvidence.last_raw_file_event_ts = $(if ($null -ne $lastRawTs) { $lastRawTs.ToString("o") } else { $null })
+              $stressEvidence.settle_decision_ts = $(if ($null -ne $decTs) { $decTs.ToString("o") } else { $null })
+              $stressEvidence.quiet_after_inject_secs = $quietAfterInject
+              $stressEvidence.settle_cap_hit = $capHit
+              $passStress = ($capHit -eq $false) -and ($null -ne $lastRawTs) -and (($lastRawTs - $injectTs).TotalSeconds -ge -2) -and ($null -ne $quietAfterInject -and $quietAfterInject -ge 4.0) -and ($stressEvidence.eye_saw_injected -eq $true) -and ($null -ne $eyeTs -and $null -ne $s4ReadTs -and $eyeTs -le $s4ReadTs)
+              if ($passStress) { $stressStatus = "pass"; $stressReason = $null }
+              else {
+                $stressStatus = "fail"
+                $stressReason = "stress-failed: decision on a stale snapshot (injected event not witnessed before the S4 read, or quiet after inject < 4 s)"
+              }
+            }
+            $stress = @{ status = $stressStatus; reason = $stressReason; evidence = $stressEvidence }
+            $stress | ConvertTo-Json -Depth 5 | Out-File -FilePath "$sliceDir\stress-verdict.json" -Encoding utf8
+            if ($stress.status -eq "fail") { $verdict = "fail"; $reasons += $stress.reason }
+            elseif ($stress.status -eq "inconclusive") { $verdict = "fail"; $reasons += $stress.reason }
             # Eye lifetime display (council 17, S5): a missing exit
             # timestamp is "still alive at close", never "unknown s".
             $eyeLifetimeDisplay = "still alive at close"
@@ -874,6 +1029,7 @@ jobs:
               s1_note = if ($null -ne $inputs) { "four checks passed in the S1 step (hash, GPG, Authenticode, winget)" } else { "S1 did not complete (slice-inputs.json missing)" }
               s1_gpg = $s1Gpg
               eye_witness = $witF
+              stress_verdict = $stress
               shot_check = $shot
               slice_window = $winF
               s6 = $s6F
@@ -905,7 +1061,7 @@ jobs:
           # the in-step check below reads the script variable $verdict
           # (assigned in the finally block), not $env:SLICE_VERDICT.
           # The separate Slice verdict gate step reads the env var.
-          if ($verdict -ne "pass") { throw "slice verdict: $verdict — per council 25, no slice run 11 without council 26" }
+          if ($verdict -ne "pass") { throw "slice verdict: $verdict — per council 27 reopen rule, a non-pass run reopens M5 immediately; no further slice run without a new council" }
           Write-Host "slice verdict: pass"
 
       - name: Upload slice results + raw logs (mandatory)
@@ -919,6 +1075,8 @@ jobs:
             ${{ env.SLICE_DIR }}\slice-inputs.json
             ${{ env.SLICE_DIR }}\slice-window.json
             ${{ env.SLICE_DIR }}\witness.json
+            ${{ env.SLICE_DIR }}\late-inject.json
+            ${{ env.SLICE_DIR }}\stress-verdict.json
             ${{ env.SLICE_DIR }}\shot-check.json
             ${{ env.SLICE_DIR }}\s6.json
             ${{ env.SLICE_DIR }}\s7.json
