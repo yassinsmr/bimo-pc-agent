@@ -322,7 +322,8 @@ jobs:
           $ErrorActionPreference = "Stop"
           # THRESHOLD PIN (cycle 74, council 32 condition 2; binding
           # cycle 76, council 33 condition 2): the settle threshold's
-          # SINGLE source of truth is $pinThreshold below (5 s). This
+          # SINGLE source of truth is $pinThreshold below (8 s — MUTATION
+          # RUN, council 33 cond. 3; revert to 5 after the run). This
           # step verifies the settle loop is BOUND to it: exactly one
           # line in THIS workflow file must carry the three anchors —
           # the settle-loop variable, "-ge $thresholdSecs", and the
@@ -337,7 +338,7 @@ jobs:
           # step's own source cannot match itself — its pattern lines
           # carry "-ge \$thresholdSecs" (backslash before $), never the
           # literal "-ge $thresholdSecs" the loop line carries.
-          $pinThreshold = 5
+          $pinThreshold = 8
           $wfPath = "$env:GITHUB_WORKSPACE\.github\workflows\windows-hand-thin-slice-run.yml"
           $wfLines = Get-Content $wfPath
           $hits = @($wfLines | Where-Object { $_ -match '\$quietSince' -and $_ -match '-ge \$thresholdSecs' -and $_ -match '\$settled = \$true' })
@@ -797,7 +798,7 @@ jobs:
               # NOMINAL quiet window (cycle 72, council 29 cond. 2;
               # binding cycle 76, council 33 cond. 2): the threshold
               # comes from $thresholdSecs, pinned by S-THRESHOLD-PIN
-              # (single source of truth, 5 s) — the loop reads the
+              # (single source of truth, 8 s during the mutation run) — the loop reads the
               # field by name, never a literal. Raw timestamps are
               # truncated to the second (run-13 finding), so a 5.0 s
               # nominal gap guarantees > 4.0 s of REAL quiet. The old
