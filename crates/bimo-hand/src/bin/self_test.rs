@@ -1014,6 +1014,11 @@ fn proof_8_1(ctx: &mut Ctx) -> Proof {
     // Phase B: a fresh install cancelled via MsiInstallProduct + an
     // external UI handler returning IDCANCEL (return 1602, product absent,
     // mutex free, service idle, no leftovers, no attributed survivor).
+    // The cancel is ACTION-BASED (run-42 fix): the supervisor aborts as
+    // soon as the handler first reports InstallFiles. The old
+    // wall-clock trigger (hand.stop at 40% of the phase-A duration) let
+    // the install outrun the cancel twice (runs 36/42: last_action
+    // PublishProduct, return 0, product left installed).
     // Download failure is inconclusive, never a pass. An inconclusive
     // 8.1 blocks merge and final reliance (v2 condition 2).
     let installers: [(&str, &str, &str, &str, &str); 1] = [
@@ -1073,6 +1078,12 @@ fn proof_8_1(ctx: &mut Ctx) -> Proof {
         let mut phase_b_status = "pass";
         let mut cancel_ms_b: u64 = 0;
         let mut stop_ms_b: u64 = 0;
+        // kill_ms_b: measured abort point (supervisor cancel_at_ms) for
+        // the VLC action trigger; falls back to the planned wall-clock
+        // kill_ms for the direct path. trigger_action_b names the action
+        // that fired the abort, when the action trigger was used.
+        let mut kill_ms_b = kill_ms;
+        let mut trigger_action_b: Option<String> = None;
         let mut return_code_b: Option<u32> = None;
         let mut ui_calls_b: u64 = 0;
         let mut handler_first_ms_b: u64 = 0;
@@ -1091,18 +1102,23 @@ fn proof_8_1(ctx: &mut Ctx) -> Proof {
             if key == "vlc" {
                 // VLC phase B goes through the supervisor: MsiInstallProduct
                 // in a dedicated thread, monitored from the supervisor's
-                // monitor thread; the stop is hand.stop at kill_ms.
-                let data_dir_b = ctx.data_dir.clone();
-                let handle = std::thread::spawn(move || {
-                    std::thread::sleep(Duration::from_millis(kill_ms));
-                    let ctl = bimo_hand::control::HandControl::new(&data_dir_b, 2);
-                    let _ = ctl.write_stop("hand.stop");
-                });
+                // monitor thread. The stop is ACTION-BASED (run-42 fix):
+                // abort as soon as the UI handler first reports
+                // InstallFiles — deterministic in install progress. The
+                // old wall-clock trigger (hand.stop at 40% of the
+                // phase-A duration) let the install outrun the cancel
+                // twice (runs 36/42: last_action PublishProduct,
+                // return 0, product left installed).
+                let trigger_path = ctx.data_dir.join("hand.stop-at-action-vlc-install-b.json");
+                let _ = std::fs::remove_file(&trigger_path);
+                let _ = std::fs::write(&trigger_path, "{\"action\": \"InstallFiles\"}");
                 let result = msi_request(ctx, "vlc-install-b", &msi_str, false, target_dir, name_sub, &sha256);
-                let _ = handle.join();
+                let _ = std::fs::remove_file(&trigger_path);
                 if let Some(r) = result {
                     status_b = r.get("status").and_then(|v| v.as_str()).unwrap_or("").to_string();
                     stop_ms_b = r.get("stop_ms").and_then(|v| v.as_u64()).unwrap_or(0);
+                    kill_ms_b = r.get("cancel_at_ms").and_then(|v| v.as_u64()).unwrap_or(kill_ms);
+                    trigger_action_b = r.get("trigger_action").and_then(|v| v.as_str()).map(|s| s.to_string());
                     return_code_b = r.get("return_code").and_then(|v| v.as_u64()).map(|v| v as u32);
                     tree_dead_b = r.get("tree_dead").and_then(|v| v.as_bool()).unwrap_or(false);
                     if let Some(ab) = r.get("abort") {
@@ -1193,7 +1209,7 @@ fn proof_8_1(ctx: &mut Ctx) -> Proof {
             "installer": key, "name_substring": name_sub, "sha256": sha256,
             "product_code": code_a, "product_version": version_a,
             "phase_a": {"status": phase_a_status, "return_code": rc_a, "install_duration_ms": install_duration_ms, "uninstall_return_code": uninstall_rc, "product_absent_after_removal": absent_after_a, "target_folder_empty_after_removal": leftovers_a, "pre_command_state": pre_a},
-            "phase_b": {"status": phase_b_status, "trigger": trigger_b, "kill_ms_after_start": kill_ms, "stop_ms": stop_ms_b, "cancel_ms": cancel_ms_b, "forced_ms": cancel_ms_b, "return_code": return_code_b, "ui_calls": ui_calls_b, "result_status": status_b, "tree_dead": tree_dead_b, "survivors": survivors_b, "product_absent": absent_b, "mutex_free": mutex_free_b, "service_idle": service_idle_b, "target_folder_empty": leftovers_b, "handler_first_ms": handler_first_ms_b, "internal_ui_prev": internal_ui_prev_b, "external_ui_prev_non_null": external_ui_prev_non_null_b, "cancel_depth": cancel_depth_b, "pre_command_state": pre_b},
+            "phase_b": {"status": phase_b_status, "trigger": trigger_b, "trigger_action": trigger_action_b, "kill_ms_after_start": kill_ms_b, "stop_ms": stop_ms_b, "cancel_ms": cancel_ms_b, "forced_ms": cancel_ms_b, "return_code": return_code_b, "ui_calls": ui_calls_b, "result_status": status_b, "tree_dead": tree_dead_b, "survivors": survivors_b, "product_absent": absent_b, "mutex_free": mutex_free_b, "service_idle": service_idle_b, "target_folder_empty": leftovers_b, "handler_first_ms": handler_first_ms_b, "internal_ui_prev": internal_ui_prev_b, "external_ui_prev_non_null": external_ui_prev_non_null_b, "cancel_depth": cancel_depth_b, "pre_command_state": pre_b},
         }));
     }
     let measured = json!({
