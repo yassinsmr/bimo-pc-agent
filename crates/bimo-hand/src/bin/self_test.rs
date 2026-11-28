@@ -277,6 +277,11 @@ fn proof_8_8(ctx: &mut Ctx) -> Proof {
         "restart_recorded": restart_recorded,
         "heartbeat_after_restart": heartbeat_after_restart,
     });
+    // (run-49 lesson) leg (a) leaves a stale `hand.stopped` behind —
+    // `clear_stop` removes the stop file, never the stopped record.
+    // Later proofs that assert on the stopped record (8.12) must not
+    // inherit it: clean it here, after all of 8.8's own assertions.
+    let _ = fs::remove_file(ctx.data_dir.join("hand.stopped"));
     if stopped_written
         && heartbeat_returned
         && missed
@@ -1023,6 +1028,15 @@ fn proof_8_12(ctx: &mut Ctx) -> Proof {
         ]
     };
     // --- Positive: kind "update" survives a TTL stop. ---
+    // (run-49 lesson) establish a clean precondition for the
+    // side-effect assertions below: an earlier proof may leave a
+    // stale `hand.stopped` behind (8.8 did — `clear_stop` removes the
+    // stop file, never the stopped record). The assertions are about
+    // THIS run, so remove any pre-existing record first and record
+    // that it was there.
+    let preexisting_stopped_removed = ctx.data_dir.join("hand.stopped").exists();
+    let _ = fs::remove_file(ctx.data_dir.join("hand.stopped"));
+    let _ = ctx.ctl.clear_stop();
     let req_update = ExecRequest {
         id: "ttl-exempt-update-1".to_string(),
         kind: "update".to_string(),
@@ -1108,7 +1122,7 @@ fn proof_8_12(ctx: &mut Ctx) -> Proof {
         None => ("no-result".to_string(), None),
     };
     let measured = json!({
-        "update": {"status": status_u, "ttl_stop_ignored": ignored_u, "ttl_stop_ignored_count": ignored_count_u, "exit_code": exit_u, "hand_stopped_absent": stopped_absent, "heartbeat_present": heartbeat_present},
+        "update": {"status": status_u, "ttl_stop_ignored": ignored_u, "ttl_stop_ignored_count": ignored_count_u, "exit_code": exit_u, "hand_stopped_absent": stopped_absent, "heartbeat_present": heartbeat_present, "preexisting_stopped_removed": preexisting_stopped_removed},
         "control_install": {"status": status_i, "stop_ms": stop_ms_i},
     });
     if status_u == "done" && ignored_u && ignored_count_u == 2 && exit_u == Some(0) && stopped_absent && heartbeat_present && status_i == "stopped" {
@@ -1187,6 +1201,54 @@ fn proof_8_13(ctx: &mut Ctx) -> Proof {
     let stopped_absent_a = !ctx.data_dir.join("hand.stopped").exists();
     let stop_absent_a = !ctx.data_dir.join("hand.stop").exists();
     // --- Leg B: stop file that cannot be removed. ---
+    // (run-49 lesson) the first trigger for this leg — a read-only
+    // `hand.stop` — was INVALID on this stack: Rust's `remove_file`
+    // deletes via a handle with delete-on-close semantics, which
+    // bypasses the read-only attribute, so `clear_stop` succeeded
+    // and the branch never fired (run 49: status `done`, flag
+    // false). The valid trigger is an EXCLUSIVE lock: a PowerShell
+    // holder opens the stop file with FileShare::None, so every
+    // open/delete attempt by the supervisor fails with a sharing
+    // violation. Order matters: the stop is filed while IDLE first
+    // (the worker may apply it — harmless), the holder locks it,
+    // the lock is confirmed by probing, and only THEN the command
+    // starts — command start cannot consume the locked stop (the
+    // honesty fix reports it as NOT cleared), and the monitor loop
+    // retries the bounded consumption and arms the stop.
+    // Clean pre-existing state first so the only stopped record that
+    // can exist afterwards is this leg's own.
+    let _ = fs::remove_file(ctx.data_dir.join("hand.stopped"));
+    let _ = ctx.ctl.clear_stop();
+    let _ = ctx.ctl.write_stop("ttl");
+    let stop_path = ctx.data_dir.join("hand.stop");
+    let stop_path_str = stop_path.to_string_lossy().to_string();
+    let mut holder = match ProcCommand::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            &format!(
+                "$f=[System.IO.File]::Open('{}','Open','Read','None'); Start-Sleep 30",
+                stop_path_str.replace('\'', "''")
+            ),
+        ])
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => return fail(json!({"reason": format!("could not spawn lock holder: {}", e)})),
+    };
+    // Confirm the lock is held: while it is not, opening the file
+    // succeeds; under FileShare::None every open fails.
+    let lock_held = wait_until(
+        || fs::File::open(&stop_path).is_err(),
+        Duration::from_secs(10),
+    );
+    if !lock_held {
+        let _ = holder.kill();
+        let _ = fs::remove_file(&stop_path);
+        let _ = fs::remove_file(ctx.data_dir.join("hand.stopped"));
+        let _ = ctx.ctl.clear_stop();
+        return fail(json!({"reason": "lock holder never locked the stop file"}));
+    }
     let req_fail = ExecRequest {
         id: "ttl-clear-fail-update-1".to_string(),
         kind: "update".to_string(),
@@ -1203,53 +1265,46 @@ fn proof_8_13(ctx: &mut Ctx) -> Proof {
         targetdir: None,
     };
     if write_exec_request(&ctx.data_dir, &req_fail).is_err() {
+        let _ = holder.kill();
+        let _ = fs::remove_file(&stop_path);
+        let _ = fs::remove_file(ctx.data_dir.join("hand.stopped"));
+        let _ = ctx.ctl.clear_stop();
         return fail(json!({"reason": "could not write exec request (clear-fail leg)"}));
     }
     if !wait_file(
         &exec_started_path(&ctx.data_dir, "ttl-clear-fail-update-1"),
         Duration::from_secs(30),
     ) {
+        let _ = holder.kill();
+        let _ = fs::remove_file(&stop_path);
+        let _ = fs::remove_file(ctx.data_dir.join("hand.stopped"));
+        let _ = ctx.ctl.clear_stop();
         return fail(json!({"reason": "clear-fail leg run never started"}));
     }
-    std::thread::sleep(Duration::from_millis(2000));
-    let _ = ctx.ctl.write_stop("ttl");
-    // Read-only on Windows makes `remove_file` fail, so every
-    // `clear_stop` in the monitor loop errors.
-    let stop_path = ctx.data_dir.join("hand.stop");
-    let mut perms = match fs::metadata(&stop_path) {
-        Ok(m) => m.permissions(),
-        Err(e) => return fail(json!({"reason": format!("stop file metadata failed: {}", e)})),
-    };
-    perms.set_readonly(true);
-    if fs::set_permissions(&stop_path, perms).is_err() {
-        return fail(json!({"reason": "could not make stop file read-only"}));
-    }
     let result_fail = wait_exec_result(&ctx.data_dir, "ttl-clear-fail-update-1", Duration::from_secs(60));
-    // Cleanup: restore writability, remove the stop and the stopped
-    // record the arming wrote, so the next proof starts clean.
-    if let Ok(m) = fs::metadata(&stop_path) {
-        let mut p = m.permissions();
-        p.set_readonly(false);
-        let _ = fs::set_permissions(&stop_path, p);
-    }
+    // Cleanup: release the lock first, then remove the stop and the
+    // stopped record the arming wrote, so the next proof starts clean.
+    let _ = holder.kill();
+    let _ = holder.wait();
     let _ = fs::remove_file(&stop_path);
     let _ = fs::remove_file(ctx.data_dir.join("hand.stopped"));
     let _ = ctx.ctl.clear_stop();
-    let (status_b, clear_failed_b, stop_ms_b) = match &result_fail {
+    let (status_b, clear_failed_b, stop_ms_b, stale_b) = match &result_fail {
         Some(r) => (
             r.get("status").and_then(|v| v.as_str()).unwrap_or("").to_string(),
             r.get("ttl_stop_clear_failed").and_then(|v| v.as_bool()).unwrap_or(false),
             r.get("stop_ms").and_then(|v| v.as_u64()),
+            r.get("stale_stop_cleared").and_then(|v| v.as_str()).map(|s| s.to_string()),
         ),
-        None => ("no-result".to_string(), false, None),
+        None => ("no-result".to_string(), false, None, None),
     };
     let measured = json!({
         "stale_leg": {"status": status_a, "stale_stop_cleared": cleared_a, "exit_code": exit_a, "hand_stopped_absent": stopped_absent_a, "hand_stop_absent": stop_absent_a},
-        "clear_fail_leg": {"status": status_b, "ttl_stop_clear_failed": clear_failed_b, "stop_ms": stop_ms_b},
+        "clear_fail_leg": {"status": status_b, "ttl_stop_clear_failed": clear_failed_b, "stop_ms": stop_ms_b, "stale_stop_cleared": stale_b},
     });
     if status_a == "done" && cleared_a.as_deref() == Some("ttl") && exit_a == Some(0)
         && stopped_absent_a && stop_absent_a
-        && status_b == "stopped" && clear_failed_b && stop_ms_b.is_some()
+        && status_b == "stopped" && clear_failed_b && stop_ms_b.is_some() && stale_b.is_none()
     {
         pass(measured)
     } else {

@@ -523,20 +523,26 @@ fn handle_msi_request(req: &ExecRequest, ctl: &HandControl, data_dir: &Path, sta
     }
 }
 
-/// Council 35 cond. 2 (c81): consume a stop filed before this
-/// command started. A stop present at command start is stale by
-/// definition — the command it could have armed against is not this
-/// one — so it is cleared (with a matching `hand.stopped` record, so
-/// the on-disk state cannot contradict the fresh run) and its reason
-/// is returned for the result JSON. A stop filed AFTER the command
-/// starts is never touched here; the monitor loop arms it normally.
-/// Returns `None` when no stop was present.
+/// Council 35 cond. 2 (c81; honesty fix, run-49 lesson): consume a
+/// stop filed before this command started. A stop present at command
+/// start is stale by definition — the command it could have armed
+/// against is not this one — so it is cleared (with a matching
+/// `hand.stopped` record, so the on-disk state cannot contradict the
+/// fresh run) and its reason is returned for the result JSON. A stop
+/// filed AFTER the command starts is never touched here; the monitor
+/// loop arms it normally. When the stop file CANNOT be removed (e.g.
+/// locked by another process), nothing is claimed: returns `None`
+/// and leaves both files for the monitor loop, which retries the
+/// bounded consumption and arms the stop instead of reporting a
+/// clearance that never happened.
 fn consume_stale_stop(ctl: &HandControl) -> Option<String> {
     if !ctl.stop_present() {
         return None;
     }
     let reason = ctl.stop_reason().unwrap_or_else(|| "hand.stop".to_string());
-    let _ = ctl.clear_stop();
+    if ctl.clear_stop().is_err() {
+        return None;
+    }
     let _ = ctl.clear_stopped_if_reason(&reason);
     Some(reason)
 }
@@ -920,6 +926,23 @@ mod tests {
         assert!(ctl.stopped_info().is_none());
         // Nothing present: None.
         assert_eq!(consume_stale_stop(&ctl), None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn stale_stop_not_claimed_when_clear_fails() {
+        let dir = test_dir();
+        let ctl = HandControl::new(&dir, 2);
+        // A directory in place of the stop file makes `clear_stop`
+        // fail — the stale stop must NOT be reported as consumed.
+        ctl.write_stop("ttl").unwrap();
+        fs::remove_file(dir.join("hand.stop")).unwrap();
+        fs::create_dir_all(dir.join("hand.stop")).unwrap();
+        ctl.apply_stop("ttl").unwrap();
+        assert_eq!(consume_stale_stop(&ctl), None);
+        // Both files are left for the monitor loop.
+        assert!(dir.join("hand.stop").exists());
+        assert!(ctl.stopped_info().is_some());
         let _ = fs::remove_dir_all(&dir);
     }
 }
